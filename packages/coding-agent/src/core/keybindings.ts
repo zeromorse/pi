@@ -35,6 +35,7 @@ export interface AppKeybindings {
 	"app.tree.unfoldOrDown": true;
 	"app.tree.editLabel": true;
 	"app.tree.toggleLabelTimestamp": true;
+	"app.tree.toggleEntryTimestamp": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -131,6 +132,10 @@ export const KEYBINDINGS = {
 	"app.tree.toggleLabelTimestamp": {
 		defaultKeys: "shift+t",
 		description: "Toggle tree label timestamps",
+	},
+	"app.tree.toggleEntryTimestamp": {
+		defaultKeys: "shift+d",
+		description: "Toggle tree entry timestamps",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

@@ -114,6 +114,7 @@ class TreeList implements Component {
 	private toolCallMap: Map<string, ToolCallInfo> = new Map();
 	private multipleRoots = false;
 	private showLabelTimestamps = false;
+	private showEntryTimestamps = false;
 	private activePathIds: Set<string> = new Set();
 	private visibleParentMap: Map<string, string | null> = new Map();
 	private visibleChildrenMap: Map<string | null, string[]> = new Map();
@@ -658,6 +659,9 @@ class TreeList implements Component {
 		if (this.showLabelTimestamps) {
 			labels += " [+label time]";
 		}
+		if (this.showEntryTimestamps) {
+			labels += " [+entry time]";
+		}
 		return labels;
 	}
 
@@ -740,13 +744,16 @@ class TreeList implements Component {
 			const label = flatNode.node.label ? theme.fg("warning", `[${flatNode.node.label}] `) : "";
 			const labelTimestamp =
 				this.showLabelTimestamps && flatNode.node.label && flatNode.node.labelTimestamp
-					? theme.fg("muted", `${this.formatLabelTimestamp(flatNode.node.labelTimestamp)} `)
+					? theme.fg("muted", `${this.formatTimestamp(flatNode.node.labelTimestamp)} `)
 					: "";
+			const entryTimestamp = this.showEntryTimestamps
+				? theme.fg("muted", `${this.formatTimestamp(entry.timestamp)} `)
+				: "";
 			const content = this.getEntryDisplayText(flatNode.node, isSelected);
 			const prefixPart = theme.fg("dim", prefix) + foldMarker + pathMarker;
 			const anchorCol = visibleWidth(prefixPart);
 			let gutter = cursor;
-			let body = prefixPart + label + labelTimestamp + content;
+			let body = prefixPart + entryTimestamp + label + labelTimestamp + content;
 			if (isSelected) {
 				gutter = theme.bg("selectedBg", gutter);
 				body = theme.bg("selectedBg", body);
@@ -851,7 +858,7 @@ class TreeList implements Component {
 		return isSelected ? theme.bold(result) : result;
 	}
 
-	private formatLabelTimestamp(timestamp: string): string {
+	private formatTimestamp(timestamp: string): string {
 		const date = new Date(timestamp);
 		const now = new Date();
 		const hours = date.getHours().toString().padStart(2, "0");
@@ -1088,6 +1095,8 @@ class TreeList implements Component {
 			}
 		} else if (kb.matches(keyData, "app.tree.toggleLabelTimestamp")) {
 			this.showLabelTimestamps = !this.showLabelTimestamps;
+		} else if (kb.matches(keyData, "app.tree.toggleEntryTimestamp")) {
+			this.showEntryTimestamps = !this.showEntryTimestamps;
 		} else {
 			const hasControlChars = [...keyData].some((ch) => {
 				const code = ch.charCodeAt(0);
@@ -1221,6 +1230,7 @@ const TREE_HELP_ITEMS: Array<{ keys: Keybinding[]; label: string; labelFirst?: b
 	{ keys: ["app.message.copy"], label: "copy" },
 	{ keys: ["app.tree.editLabel"], label: "label" },
 	{ keys: ["app.tree.toggleLabelTimestamp"], label: "label time" },
+	{ keys: ["app.tree.toggleEntryTimestamp"], label: "entry time" },
 	{
 		keys: [
 			"app.tree.filter.default",

@@ -5,6 +5,7 @@
 ### Added
 
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
+- Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
 
 ### Fixed
 

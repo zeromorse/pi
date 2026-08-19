@@ -21,23 +21,23 @@ beforeEach(() => {
 });
 
 // Helper to create a user message entry
-function userMessage(id: string, parentId: string | null, content: string): SessionMessageEntry {
+function userMessage(id: string, parentId: string | null, content: string, timestamp?: string): SessionMessageEntry {
 	return {
 		type: "message",
 		id,
 		parentId,
-		timestamp: new Date().toISOString(),
+		timestamp: timestamp ?? new Date().toISOString(),
 		message: { role: "user", content, timestamp: Date.now() },
 	};
 }
 
 // Helper to create an assistant message entry
-function assistantMessage(id: string, parentId: string | null, text: string): SessionMessageEntry {
+function assistantMessage(id: string, parentId: string | null, text: string, timestamp?: string): SessionMessageEntry {
 	return {
 		type: "message",
 		id,
 		parentId,
-		timestamp: new Date().toISOString(),
+		timestamp: timestamp ?? new Date().toISOString(),
 		message: {
 			role: "assistant",
 			content: [{ type: "text", text }],
@@ -268,6 +268,7 @@ describe("TreeSelectorComponent", () => {
 			expect(plain).toContain("filters");
 			expect(plain).toContain("cycle");
 			expect(plain).toContain("label time");
+			expect(plain).toContain("entry time");
 			expect(plain).not.toContain("...");
 			expect(plainLines.every((line) => visibleWidth(line) <= 30)).toBe(true);
 		});
@@ -321,6 +322,70 @@ describe("TreeSelectorComponent", () => {
 
 			render = list.render(200).join("\n");
 			expect(render).toContain("3/28 14:32");
+			expect(render).toContain("[+label time]");
+		});
+	});
+
+	describe("entry timestamps", () => {
+		test("toggles entry timestamps for all nodes", () => {
+			const entryDate = new Date(2026, 2, 28, 9, 15, 0).toISOString();
+			const entries = [
+				userMessage("user-1", null, "hello", entryDate),
+				assistantMessage("asst-1", "user-1", "hi", entryDate),
+			];
+			const tree = buildTree(entries);
+
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+			);
+
+			const list = selector.getTreeList();
+			let render = list.render(200).join("\n");
+			expect(render).not.toContain("3/28 09:15");
+			expect(render).not.toContain("[+entry time]");
+
+			selector.handleInput("D");
+
+			render = list.render(200).join("\n");
+			expect(render).toContain("3/28 09:15");
+			expect(render).toContain("[+entry time]");
+		});
+
+		test("shows entry and label timestamps independently", () => {
+			const entryDate = new Date(2026, 2, 28, 9, 15, 0).toISOString();
+			const entries = [
+				userMessage("user-1", null, "hello", entryDate),
+				assistantMessage("asst-1", "user-1", "hi", entryDate),
+			];
+			const tree = buildTree(entries);
+			tree[0]!.label = "checkpoint";
+			tree[0]!.labelTimestamp = new Date(2026, 2, 28, 14, 32, 0).toISOString();
+
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+			);
+
+			const list = selector.getTreeList();
+
+			selector.handleInput("T");
+			let render = list.render(200).join("\n");
+			expect(render).toContain("[checkpoint]");
+			expect(render).toContain("3/28 14:32");
+			expect(render).not.toContain("3/28 09:15");
+
+			selector.handleInput("D");
+			render = list.render(200).join("\n");
+			expect(render).toContain("3/28 09:15");
+			expect(render).toContain("3/28 14:32");
+			expect(render).toContain("[+entry time]");
 			expect(render).toContain("[+label time]");
 		});
 	});
