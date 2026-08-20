@@ -147,6 +147,7 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { TreeEntryPreview } from "./components/tree-entry-preview.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -5181,6 +5182,29 @@ export class InteractiveMode {
 				} catch (error) {
 					this.showError(error instanceof Error ? error.message : String(error));
 				}
+			};
+			selector.onPreview = (node, toolCall) => {
+				let overlayHandle: OverlayHandle | undefined;
+				const preview = new TreeEntryPreview(node, this.ui.terminal.rows, { relatedToolCall: toolCall });
+				preview.onClose = () => {
+					overlayHandle?.hide();
+				};
+				preview.onCopySelection = (text) => {
+					void (async () => {
+						try {
+							await copyToClipboard(text);
+							this.showStatus("Copied selected text to clipboard");
+						} catch (error) {
+							this.showError(error instanceof Error ? error.message : String(error));
+						}
+					})();
+				};
+				overlayHandle = this.ui.showOverlay(preview, {
+					width: "100%",
+					anchor: "top-center",
+					mouse: true,
+					onPlaced: (row, col) => preview.setOverlayPlacement(row, col),
+				});
 			};
 			return { component: selector, focus: selector };
 		});

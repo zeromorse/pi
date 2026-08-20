@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `mouse` overlay option: overlays can request SGR mouse tracking so the mouse wheel reaches their `handleInput` while shown, with tracking disabled again on hide and re-asserted after a suspend/resume cycle. Added `onPlaced` overlay option reporting the resolved screen position each render so mouse-driven overlays can map screen coordinates to content.
+
 ### Fixed
 
 - Fixed duplicate fullscreen right-click paste in VS Code-based terminals on Windows ([#8186](https://github.com/earendil-works/pi/issues/8186)).

@@ -36,6 +36,7 @@ export interface AppKeybindings {
 	"app.tree.editLabel": true;
 	"app.tree.toggleLabelTimestamp": true;
 	"app.tree.toggleEntryTimestamp": true;
+	"app.tree.togglePreview": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -136,6 +137,10 @@ export const KEYBINDINGS = {
 	"app.tree.toggleEntryTimestamp": {
 		defaultKeys: "shift+d",
 		description: "Toggle tree entry timestamps",
+	},
+	"app.tree.togglePreview": {
+		defaultKeys: "shift+p",
+		description: "Toggle tree entry preview",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

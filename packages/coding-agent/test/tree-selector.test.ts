@@ -764,4 +764,124 @@ describe("TreeSelectorComponent", () => {
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-3a");
 		});
 	});
+
+	describe("entry preview", () => {
+		test("shift+p invokes onPreview with the selected node", () => {
+			const tree = buildTree([
+				userMessage("user-1", null, "hello"),
+				assistantMessage("asst-1", "user-1", "hi there"),
+			]);
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+			);
+			let previewed: SessionTreeNode | undefined;
+			selector.onPreview = (node) => {
+				previewed = node;
+			};
+
+			selector.handleInput("P");
+
+			expect(previewed?.entry.id).toBe("asst-1");
+		});
+
+		test("shift+p passes the originating tool call for tool results", () => {
+			const entries: SessionEntry[] = [
+				userMessage("user-1", null, "run it"),
+				{
+					type: "message",
+					id: "asst-tool",
+					parentId: "user-1",
+					timestamp: new Date().toISOString(),
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", id: "tc-9", name: "bash", arguments: { command: "ls" } }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "claude-sonnet-4",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "toolUse",
+						timestamp: Date.now(),
+					},
+				},
+				{
+					type: "message",
+					id: "tool-result-9",
+					parentId: "asst-tool",
+					timestamp: new Date().toISOString(),
+					message: {
+						role: "toolResult",
+						toolCallId: "tc-9",
+						toolName: "bash",
+						content: [{ type: "text", text: "out" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				},
+			];
+			const tree = buildTree(entries);
+			const selector = new TreeSelectorComponent(
+				tree,
+				"tool-result-9",
+				24,
+				() => {},
+				() => {},
+			);
+			let toolCall: { name: string; arguments: Record<string, unknown> } | undefined;
+			selector.onPreview = (_node, call) => {
+				toolCall = call;
+			};
+
+			selector.handleInput("P");
+
+			expect(toolCall?.name).toBe("bash");
+			expect(toolCall?.arguments).toEqual({ command: "ls" });
+		});
+
+		test("shift+p previews nothing when the list is empty", () => {
+			const tree = buildTree([userMessage("user-1", null, "hello")]);
+			const selector = new TreeSelectorComponent(
+				tree,
+				"user-1",
+				24,
+				() => {},
+				() => {},
+			);
+			const list = selector.getTreeList();
+			let called = false;
+			selector.onPreview = () => {
+				called = true;
+			};
+
+			// Switch to labeled-only filter (no labels -> empty list)
+			selector.handleInput("\x0c"); // ctrl+l
+			expect(list.getSelectedNode()).toBeUndefined();
+
+			selector.handleInput("P");
+			expect(called).toBe(false);
+		});
+
+		test("help includes preview hint", () => {
+			const tree = buildTree([userMessage("user-1", null, "hello")]);
+			const selector = new TreeSelectorComponent(
+				tree,
+				"user-1",
+				24,
+				() => {},
+				() => {},
+			);
+			const plain = selector.render(60).map(stripVTControlCharacters).join("\n");
+			expect(plain).toContain("preview");
+		});
+	});
 });

@@ -92,6 +92,7 @@ Example shape:
 | ←/→ | Page up/down |
 | Ctrl+←/Ctrl+→ or Alt+←/Alt+→ | Fold/unfold or jump between branch segments |
 | Shift+L | Set or clear a label on the selected entry |
+| Shift+P | Open a full-detail preview page for the selected entry |
 | Shift+T | Toggle label timestamps |
 | Shift+D | Toggle entry timestamps |
 | Enter | Select entry |
@@ -99,6 +100,10 @@ Example shape:
 | Ctrl+O | Cycle filter mode |
 
 Filter modes are: default, no-tools, user-only, labeled-only, and all. Configure the default with `treeFilterMode` in [Settings](settings.md).
+
+### Entry Preview
+
+Press `Shift+P` on a selected entry to open a full-detail preview page. The preview renders the complete content with markdown and syntax highlighting: message text, thinking blocks, tool call arguments (highlighted JSON), tool result output, bash commands, and compaction/branch summaries. Scroll with the arrow keys, Page Up/Down, Home/End, or the mouse wheel. Drag with the mouse to highlight text; press `Ctrl+X` to copy the selection (or the whole entry when nothing is selected). Hold `Shift` while dragging to select with the terminal's native selection, which works with `Cmd+C`/`Ctrl+C`/`Ctrl+Shift+C`. Press Escape to return to the tree.
 
 ### Selection Behavior
 

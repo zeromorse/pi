@@ -159,6 +159,18 @@ export interface OverlayOptions {
 	visible?: (termWidth: number, termHeight: number) => boolean;
 	/** If true, don't capture keyboard focus when shown */
 	nonCapturing?: boolean;
+	/**
+	 * Request SGR mouse tracking while this overlay is visible. Use for overlays
+	 * that scroll with the mouse wheel; mouse events are delivered to the focused
+	 * component's handleInput as raw SGR sequences.
+	 */
+	mouse?: boolean;
+	/**
+	 * Called each render cycle with the overlay's resolved screen position.
+	 * Components that handle mouse events use it to map screen coordinates
+	 * from SGR events to their own content coordinates.
+	 */
+	onPlaced?: (row: number, col: number, width: number) => void;
 }
 
 /** Options for {@link OverlayHandle.unfocus}. */
@@ -354,6 +366,7 @@ export abstract class TuiBase extends Container implements TUI {
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
 	private overlayStack: OverlayStackEntry[] = [];
+	private overlayMouseActive = false;
 
 	get hasOverlayEntries(): boolean {
 		return this.overlayStack.length > 0;
@@ -555,6 +568,7 @@ export abstract class TuiBase extends Container implements TUI {
 			focusOrder: ++this.focusOrderCounter,
 		};
 		this.overlayStack.push(entry);
+		this.syncOverlayMouseCapture();
 		// Only focus if overlay is actually visible
 		if (!options?.nonCapturing && this.isOverlayVisible(entry)) {
 			this.setFocus(component);
@@ -570,6 +584,7 @@ export abstract class TuiBase extends Container implements TUI {
 					this.clearOverlayFocusRestoreFor(entry);
 					this.retargetOverlayPreFocus(entry);
 					this.overlayStack.splice(index, 1);
+					this.syncOverlayMouseCapture();
 					// Restore focus if this overlay had focus
 					if (this.focusedComponent === component) {
 						const topVisible = this.getTopmostVisibleOverlay();
@@ -582,6 +597,7 @@ export abstract class TuiBase extends Container implements TUI {
 			setHidden: (hidden: boolean) => {
 				if (entry.hidden === hidden) return;
 				entry.hidden = hidden;
+				this.syncOverlayMouseCapture();
 				// Update focus when hiding/showing
 				if (hidden) {
 					this.clearOverlayFocusRestoreFor(entry);
@@ -648,6 +664,7 @@ export abstract class TuiBase extends Container implements TUI {
 		this.clearOverlayFocusRestoreFor(overlay);
 		this.retargetOverlayPreFocus(overlay);
 		this.overlayStack.pop();
+		this.syncOverlayMouseCapture();
 		if (this.focusedComponent === overlay.component) {
 			// Find topmost visible overlay, or fall back to preFocus
 			const topVisible = this.getTopmostVisibleOverlay();
@@ -676,6 +693,24 @@ export abstract class TuiBase extends Container implements TUI {
 			return entry.options.visible(this.terminal.columns, this.terminal.rows);
 		}
 		return true;
+	}
+
+	/**
+	 * Keep SGR mouse tracking in sync with visible overlays that request it.
+	 * Button-motion tracking preserves clicks and wheel events without
+	 * forwarding every pointer movement. No-op in fullscreen mode, which
+	 * manages its own always-on mouse tracking.
+	 */
+	private syncOverlayMouseCapture(): void {
+		if (this.mode === "fullscreen") return;
+		const wanted = this.overlayStack.some((entry) => !entry.hidden && entry.options?.mouse === true);
+		if (wanted === this.overlayMouseActive) return;
+		this.overlayMouseActive = wanted;
+		if (this.stopped) return;
+		// 1000: normal tracking, 1002: button-motion, 1004: focus events, 1006: SGR encoding
+		this.terminal.write(
+			wanted ? "\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h" : "\x1b[?1006l\x1b[?1004l\x1b[?1002l\x1b[?1000l",
+		);
 	}
 
 	/** Find the visual-frontmost visible capturing overlay, if any */
@@ -707,6 +742,9 @@ export abstract class TuiBase extends Container implements TUI {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
 		}
+		// Re-assert overlay mouse tracking after a suspend/resume cycle
+		this.overlayMouseActive = false;
+		this.syncOverlayMouseCapture();
 		this.queryCellSize();
 		this.requestRender();
 	}
@@ -754,6 +792,10 @@ export abstract class TuiBase extends Container implements TUI {
 		this.cancelRenderTimer();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
+		}
+		if (this.overlayMouseActive) {
+			this.terminal.write("\x1b[?1006l\x1b[?1004l\x1b[?1002l\x1b[?1000l");
+			this.overlayMouseActive = false;
 		}
 		this.beforeTerminalStop(options);
 		this.terminal.showCursor();
@@ -1123,6 +1165,8 @@ export abstract class TuiBase extends Container implements TUI {
 
 			// Get final row/col with actual overlay height
 			const { row, col } = this.resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
+
+			options?.onPlaced?.(row, col, width);
 
 			rendered.push({ overlayLines, row, col, w: width });
 			minLinesNeeded = Math.max(minLinesNeeded, row + overlayLines.length);

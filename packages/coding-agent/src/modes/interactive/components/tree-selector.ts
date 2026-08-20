@@ -98,7 +98,7 @@ export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" |
  * Tree list component with selection and ASCII art visualization
  */
 /** Tool call info for lookup */
-interface ToolCallInfo {
+export interface TreeToolCallInfo {
 	name: string;
 	arguments: Record<string, unknown>;
 }
@@ -111,7 +111,7 @@ class TreeList implements Component {
 	private maxVisibleLines: number;
 	private filterMode: FilterMode = "default";
 	private searchQuery = "";
-	private toolCallMap: Map<string, ToolCallInfo> = new Map();
+	private toolCallMap: Map<string, TreeToolCallInfo> = new Map();
 	private multipleRoots = false;
 	private showLabelTimestamps = false;
 	private showEntryTimestamps = false;
@@ -125,6 +125,15 @@ class TreeList implements Component {
 	public onCancel?: () => void;
 	public onCopy?: (text: string | undefined) => void;
 	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
+	public onPreview?: (node: SessionTreeNode, toolCall?: TreeToolCallInfo) => void;
+
+	/** Look up the tool call that produced a tool result, when available */
+	getToolCallForNode(node: SessionTreeNode): TreeToolCallInfo | undefined {
+		const entry = node.entry;
+		if (entry.type !== "message" || entry.message.role !== "toolResult") return undefined;
+		const toolCallId = (entry.message as { toolCallId?: string }).toolCallId;
+		return toolCallId ? this.toolCallMap.get(toolCallId) : undefined;
+	}
 
 	constructor(
 		tree: SessionTreeNode[],
@@ -1097,6 +1106,11 @@ class TreeList implements Component {
 			this.showLabelTimestamps = !this.showLabelTimestamps;
 		} else if (kb.matches(keyData, "app.tree.toggleEntryTimestamp")) {
 			this.showEntryTimestamps = !this.showEntryTimestamps;
+		} else if (kb.matches(keyData, "app.tree.togglePreview")) {
+			const selected = this.filteredNodes[this.selectedIndex];
+			if (selected) {
+				this.onPreview?.(selected.node, this.getToolCallForNode(selected.node));
+			}
 		} else {
 			const hasControlChars = [...keyData].some((ch) => {
 				const code = ch.charCodeAt(0);
@@ -1229,6 +1243,7 @@ const TREE_HELP_ITEMS: Array<{ keys: Keybinding[]; label: string; labelFirst?: b
 	{ keys: ["app.tree.foldOrUp", "app.tree.unfoldOrDown"], label: "branch" },
 	{ keys: ["app.message.copy"], label: "copy" },
 	{ keys: ["app.tree.editLabel"], label: "label" },
+	{ keys: ["app.tree.togglePreview"], label: "preview" },
 	{ keys: ["app.tree.toggleLabelTimestamp"], label: "label time" },
 	{ keys: ["app.tree.toggleEntryTimestamp"], label: "entry time" },
 	{
@@ -1342,6 +1357,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 	private treeContainer: Container;
 	private onLabelChangeCallback?: (entryId: string, label: string | undefined) => void;
 	public onCopy?: (text: string | undefined) => void;
+	public onPreview?: (node: SessionTreeNode, toolCall?: TreeToolCallInfo) => void;
 
 	// Focusable implementation - propagate to labelInput when active for IME cursor positioning
 	private _focused = false;
@@ -1376,6 +1392,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		this.treeList.onCancel = onCancel;
 		this.treeList.onCopy = (text) => this.onCopy?.(text);
 		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
+		this.treeList.onPreview = (node, toolCall) => this.onPreview?.(node, toolCall);
 
 		this.treeContainer = new Container();
 		this.treeContainer.addChild(this.treeList);
