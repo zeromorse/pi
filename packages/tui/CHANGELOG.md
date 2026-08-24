@@ -6,10 +6,13 @@
 
 - Added `mouse` overlay option: overlays can request SGR mouse tracking so the mouse wheel reaches their `handleInput` while shown, with tracking disabled again on hide and re-asserted after a suspend/resume cycle. Added `onPlaced` overlay option reporting the resolved screen position each render so mouse-driven overlays can map screen coordinates to content.
 
+## [0.84.3] - 2026-08-24
+
 ### Fixed
 
 - Fixed duplicate fullscreen right-click paste in VS Code-based terminals on Windows ([#8186](https://github.com/earendil-works/pi/issues/8186)).
 - Fixed padded text exceeding narrow terminal widths ([#8252](https://github.com/earendil-works/pi/issues/8252)).
+- Fixed wrapped Markdown table links leaking color into borders and neighboring cells, including tables inside blockquotes ([#8335](https://github.com/earendil-works/pi/issues/8335)).
 
 ## [0.84.2] - 2026-08-14
 
