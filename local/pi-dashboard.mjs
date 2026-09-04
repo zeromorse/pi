@@ -174,8 +174,31 @@ function sessionFileCreateMs(name) {
 	return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +m[7]);
 }
 
+// header 的 parentSession(fork 分支指向被 fork 的文件路径),按 mtime 缓存
+const headerCache = new Map(); // path -> { mtimeMs, parent }
+function headerParentOf(path, mtimeMs) {
+	const c = headerCache.get(path);
+	if (c && c.mtimeMs === mtimeMs) return c.parent;
+	let parent = null;
+	try {
+		for (const line of readSlice(path, 0, 2048).split("\n")) {
+			if (!line) continue;
+			try {
+				const e = JSON.parse(line);
+				if (e?.type === "session") {
+					parent = typeof e.parentSession === "string" ? e.parentSession : null;
+					break;
+				}
+			} catch {}
+		}
+	} catch {}
+	headerCache.set(path, { mtimeMs, parent });
+	return parent;
+}
+
 function listSessionFiles(dir) {
-	// 按 mtime 降序列出全部会话文件;createMs 取文件名里的创建时间,解析失败退回 mtime
+	// 按 mtime 降序列出全部会话文件;createMs 取文件名里的创建时间,解析失败退回 mtime;
+	// parent 取 header 的 parentSession(进程运行中 fork 的分支指向原文件,配对接管用)
 	let files;
 	try {
 		files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
@@ -187,7 +210,12 @@ function listSessionFiles(dir) {
 		const path = join(dir, f);
 		try {
 			const st = statSync(path);
-			out.push({ path, mtimeMs: st.mtimeMs, createMs: sessionFileCreateMs(f) ?? st.mtimeMs });
+			out.push({
+				path,
+				mtimeMs: st.mtimeMs,
+				createMs: sessionFileCreateMs(f) ?? st.mtimeMs,
+				parent: headerParentOf(path, st.mtimeMs),
+			});
 		} catch {}
 	}
 	out.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -599,7 +627,10 @@ function jumpToTerminal(row) {
 }
 
 // 停止选中会话的 pi 进程(只杀进程,不改会话文件;tmux 下保留 pane/shell)
-function stopSession(row) {
+// 先 SIGTERM(pi 注册了处理器做优雅退出);但 TUI 主线程可能已死锁在同步 write()
+// (如 pty 缓冲满、读端不消费),事件循环阻塞 → JS 信号处理器永远不执行,SIGTERM 无效。
+// 所以发送后短轮询,进程仍存活则升级 SIGKILL(内核级,必杀;会话文件已落盘不受影响)。
+function stopSession(row, onKill) {
 	const pid = row?.pid;
 	if (!pid) return "无进程信息(仅 live 模式可停止)";
 	try {
@@ -610,10 +641,32 @@ function stopSession(row) {
 	const sig = row.status === "stalled" ? "SIGKILL" : "SIGTERM";
 	try {
 		process.kill(pid, sig);
-		return `已发送 ${sig} → pid ${pid} (${basename(row.cwd ?? "") || "pi"})`;
 	} catch {
 		return `停止失败: kill -${sig === "SIGKILL" ? 9 : 15} ${pid}`;
 	}
+	const label = basename(row.cwd ?? "") || "pi";
+	if (sig === "SIGKILL") return `已发送 SIGKILL → pid ${pid} (${label})`;
+	// SIGTERM 后异步升级:最多等 8s(500ms x 16),仍存活则 SIGKILL
+	let tries = 0;
+	const timer = setInterval(() => {
+		tries++;
+		let alive = true;
+		try {
+			process.kill(pid, 0);
+		} catch {
+			alive = false;
+		}
+		if (!alive || tries >= 16) {
+			clearInterval(timer);
+			if (alive) {
+				try {
+					process.kill(pid, "SIGKILL");
+					onKill?.(`pid ${pid} 未响应 SIGTERM(主线程疑似卡死),已升级 SIGKILL`);
+				} catch {}
+			}
+		}
+	}, 500);
+	return `已发送 SIGTERM → pid ${pid} (${label})`;
 }
 
 function statusLabel(row) {
@@ -1147,45 +1200,96 @@ function collectActive() {
 	const rows = [];
 	for (const [cwd, cwdProcs] of byCwd) {
 		const files = listSessionFiles(cwdToSessionDir(cwd));
-		// 进程 <-> 会话文件配对:取"创建时间 <= 进程启动 + 5s"的最新文件
-		// (新会话文件在进程启动后立刻创建;resume 时配到被继续的旧文件)。
-		// 多进程按启动时间降序处理,更新的进程优先占用文件。
+		// 进程 <-> 会话文件配对(纯启发式: pi 写完即关不持有句柄,也没有锁文件)。
+		// 会话文件名时间戳 = 会话开始时刻 ≈ 进程启动时间,但文件落盘延迟到首条 assistant 回复。
+		// 第 1 轮(新会话): |文件创建时间 - 进程启动| <= 5s,进程启动时新建的会话,强绑定。
+		// 第 2 轮(resume): 文件创建早于进程启动 + 5s,且进程启动后(容差 5s)写入过(在续写);
+		//        候选取 mtime 最新(最近被写的最可能是该进程在续写的),平手取 createMs 最大。
+		//        已知局限: 进程 waiting 很久、同目录又有更晚死的进程时仍可能错配(元数据无法区分)。
+		// 两轮都跳过已占用文件,继续找次优。
+		// 注意不能按 mtime 降序取第一个满足"createMs <= 启动+5s"的文件: 已退出进程留下的死文件
+		// mtime 常仍是目录最新,活进程会错配到死会话 → 死会话一直显示"存活"(带活进程的 pid,
+		// 按 x 停止还会误杀无辜进程),真正在跑的会话反而不显示(已踩坑)。
+		// fork 接管: 进程运行中 /fork 会创建新分支文件(header.parentSession 指向原文件)并转过去写,
+		// 按启动时间配会停在父文件上 → 沿未占用的子分支链把进程改配到最新分支。
+		const procsDesc = [...cwdProcs].sort((a, b) => b.startMs - a.startMs);
 		const procByFile = new Map();
-		for (const p of [...cwdProcs].sort((a, b) => b.startMs - a.startMs)) {
-			const cand = files.find((f) => f.createMs <= p.startMs + 5000);
-			if (cand && !procByFile.has(cand.path)) procByFile.set(cand.path, p);
+		const fileOfProc = new Map();
+		const pair = (f, p) => {
+			procByFile.set(f.path, p);
+			fileOfProc.set(p, f);
+		};
+		for (const p of procsDesc) {
+			for (const f of files) {
+				if (procByFile.has(f.path)) continue;
+				if (Math.abs(f.createMs - p.startMs) <= 5000) {
+					pair(f, p);
+					break;
+				}
+			}
 		}
-		// 显示哪些文件:
-		// 1) 有活进程配对的必选(主依据,配对 = 文件创建时间 <= 进程启动+5s 的最新文件)
-		// 2) 未配对进程各补一个 mtime 最新的未占用文件(配对失败时的兑底)
-		// 3) 15 秒内仍在写入的文件兑底(进程刚启动/时钟误差)
-		// 注意不用"mtime 前 k 个无条件入选":被 kill 的进程留下的文件 mtime 常仍是目录最新,
-		// 会永久顶替活会话的行(已踩坑)。
-		const chosen = new Set();
-		for (const f of files) {
-			if (procByFile.has(f.path)) chosen.add(f.path);
+		for (const p of procsDesc) {
+			if (fileOfProc.has(p)) continue;
+			let cand = null;
+			for (const f of files) {
+				if (procByFile.has(f.path)) continue;
+				if (f.createMs > p.startMs + 5000) continue;
+				if (f.mtimeMs < p.startMs - 5000) continue; // 进程启动后没写过 → 不是它在续写
+				if (!cand || f.mtimeMs > cand.mtimeMs || (f.mtimeMs === cand.mtimeMs && f.createMs > cand.createMs)) cand = f;
+			}
+			if (cand) pair(cand, p);
 		}
-		let unmatched = cwdProcs.length - procByFile.size;
-		for (const f of files) {
-			if (unmatched <= 0) break;
-			if (chosen.has(f.path)) continue;
-			chosen.add(f.path);
-			unmatched--;
+		for (const p of procsDesc) {
+			let f = fileOfProc.get(p);
+			if (!f) continue;
+			for (let i = 0; i < files.length; i++) {
+				let child = null;
+				for (const c of files) {
+					if (c.parent !== f.path || procByFile.has(c.path)) continue;
+					if (c.createMs <= p.startMs + 5000) continue; // 非本进程启动后的 fork 产物
+					if (!child || c.createMs > child.createMs) child = c;
+				}
+				if (!child || child.mtimeMs < f.mtimeMs) break; // 没有更新的子分支
+				procByFile.delete(f.path);
+				pair(child, p);
+				f = child;
+			}
 		}
+		// 显示哪些行:
+		// 1) 配上进程的会话文件(带 pid/term)
+		// 2) 未配上文件的进程 → 合成行(带 pid/term,可停止);不抓 mtime 最新的文件冒充,
+		//    那多半是已退出进程留下的死会话,会把死会话"顶活"(已踩坑)
+		// 3) 15 秒内仍在写入的文件兜底(新会话刚落盘/时钟误差,短暂显示)
+		const chosen = new Set(procByFile.keys());
 		const freshCutoff = Date.now() - 15000;
 		for (const f of files) {
-			if (f.mtimeMs >= freshCutoff && !chosen.has(f.path)) chosen.add(f.path);
+			if (f.mtimeMs >= freshCutoff) chosen.add(f.path);
 		}
 		const picked = files.filter((f) => chosen.has(f.path));
-		if (picked.length === 0) {
-			rows.push({ file: "(no session file)", cwd, name: null, status: "idle", detail: "", ageSec: null, term: null });
-			continue;
-		}
 		for (const f of picked) {
 			const row = analyzeSession(f.path);
 			row.term = procByFile.get(f.path)?.term ?? null;
 			row.pid = procByFile.get(f.path)?.pid ?? null;
 			rows.push(row);
+		}
+		for (const p of procsDesc) {
+			if (fileOfProc.has(p)) continue;
+			rows.push({
+				file: `(pid ${p.pid})`,
+				cwd,
+				sessionId: null,
+				name: null,
+				status: "idle",
+				detail: "会话文件未落盘或 resume 后无写入",
+				ageSec: null,
+				model: null,
+				stopReason: null,
+				lastReply: null,
+				lastUser: null,
+				toolCall: null,
+				term: p.term,
+				pid: p.pid,
+			});
 		}
 	}
 	// 有 pid 但 lsof 没拿到 cwd 的进程,单独提示
@@ -1457,13 +1561,13 @@ if (!watch) {
 					const now = Date.now();
 						if (state.pendingKill && state.pendingKill.file === row.file && now - state.pendingKill.ts <= 10000) {
 							state.pendingKill = null;
-							state.notice = { text: stopSession(row), ts: now };
+							state.notice = { text: stopSession(row, (msg) => { state.notice = { text: msg, ts: Date.now() }; }), ts: now };
 						} else if (row.pid) {
 							state.pendingKill = { file: row.file, ts: now };
 							const label = truncate(`${basename(row.cwd ?? "") || "pi"} / ${row.name ?? basename(row.file)}`, 60);
 							state.notice = { text: `停止 pid=${row.pid} (${label})? 再按 x 确认`, ts: now };
 						} else {
-							state.notice = { text: stopSession(row), ts: now };
+							state.notice = { text: stopSession(row, (msg) => { state.notice = { text: msg, ts: Date.now() }; }), ts: now };
 						}
 					return true;
 				}
@@ -1490,13 +1594,13 @@ if (!watch) {
 					const now = Date.now();
 						if (state.pendingKill && state.pendingKill.file === row.file && now - state.pendingKill.ts <= 10000) {
 							state.pendingKill = null;
-							state.notice = { text: stopSession(row), ts: now };
+							state.notice = { text: stopSession(row, (msg) => { state.notice = { text: msg, ts: Date.now() }; }), ts: now };
 						} else if (row.pid) {
 							state.pendingKill = { file: row.file, ts: now };
 							const label = truncate(`${basename(row.cwd ?? "") || "pi"} / ${row.name ?? basename(row.file)}`, 60);
 							state.notice = { text: `停止 pid=${row.pid} (${label})? 再按 x 确认`, ts: now };
 						} else {
-							state.notice = { text: stopSession(row), ts: now };
+							state.notice = { text: stopSession(row, (msg) => { state.notice = { text: msg, ts: Date.now() }; }), ts: now };
 						}
 					return true;
 				}
