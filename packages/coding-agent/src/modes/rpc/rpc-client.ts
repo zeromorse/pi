@@ -391,10 +391,11 @@ export class RpcClient {
 
 	/**
 	 * Clone the current active branch into a new session.
+	 * @param name Optional display name for the cloned session
 	 * @returns Object with `cancelled: true` if an extension cancelled the clone
 	 */
-	async clone(): Promise<{ cancelled: boolean }> {
-		const response = await this.send({ type: "clone" });
+	async clone(name?: string): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "clone", name });
 		return this.getData(response);
 	}
 

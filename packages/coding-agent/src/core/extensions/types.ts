@@ -369,7 +369,11 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	/** Fork from a specific entry, creating a new session file. */
 	fork(
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+		options?: {
+			position?: "before" | "at";
+			name?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
 	): Promise<{ cancelled: boolean }>;
 
 	/** Navigate to a different point in the session tree. */
@@ -1736,7 +1740,11 @@ export interface ExtensionCommandContextActions {
 	}) => Promise<{ cancelled: boolean }>;
 	fork: (
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+		options?: {
+			position?: "before" | "at";
+			name?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
 	) => Promise<{ cancelled: boolean }>;
 	navigateTree: (
 		targetId: string,

@@ -49,7 +49,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/tree` | Jump to any point in the session and continue from there |
 | `/trust` | Save project trust decision for future sessions |
 | `/fork` | Create a new session from a previous user message |
-| `/clone` | Duplicate the current active branch into a new session |
+| `/clone [name]` | Duplicate the current active branch into a new session, optionally with a name |
 | `/compact [prompt]` | Manually compact context, optionally with custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML or JSONL |
@@ -91,7 +91,7 @@ Useful session commands:
 - `/session` shows the current session file and ID.
 - `/tree` navigates the in-file session tree and can summarize abandoned branches.
 - `/fork` creates a new session from an earlier user message.
-- `/clone` duplicates the current active branch into a new session file.
+- `/clone [name]` duplicates the current active branch into a new session file, optionally with a name.
 - `/compact` summarizes older messages to free context.
 
 See [Sessions](sessions.md) and [Compaction](compaction.md) for details.

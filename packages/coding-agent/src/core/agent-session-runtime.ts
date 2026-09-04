@@ -259,7 +259,30 @@ export class AgentSessionRuntime {
 		return { cancelled: false };
 	}
 
+	/**
+	 * Fork the session at the given entry.
+	 *
+	 * When `options.name` is provided and non-empty, the forked session gets
+	 * that display name (appended as a session_info entry, overriding any
+	 * inherited name from the source session).
+	 */
 	async fork(
+		entryId: string,
+		options?: {
+			position?: "before" | "at";
+			name?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
+	): Promise<{ cancelled: boolean; selectedText?: string }> {
+		const result = await this.forkSession(entryId, options);
+		const name = options?.name?.trim();
+		if (!result.cancelled && name) {
+			this.session.setSessionName(name);
+		}
+		return result;
+	}
+
+	private async forkSession(
 		entryId: string,
 		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 	): Promise<{ cancelled: boolean; selectedText?: string }> {

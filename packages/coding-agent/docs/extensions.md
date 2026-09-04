@@ -323,6 +323,7 @@ user sends another prompt ◄─────────────────
   ├─► session_before_fork (can cancel)
   ├─► session_shutdown
   ├─► session_start { reason: "fork", previousSessionFile }
+  ├─► session_info_changed (only when /clone <name> was given)
   └─► resources_discover { reason: "startup" }
 
 /name or pi.setSessionName()
@@ -1193,6 +1194,7 @@ if (cloneResult.cancelled) {
 Options:
 - `position`: `"before"` (default) forks before the selected user message, restoring that prompt into the editor
 - `position`: `"at"` duplicates the active path through the selected entry without restoring editor text
+- `name`: sets the forked session's display name (same as `/name`)
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 ### ctx.navigateTree(targetId, options?)

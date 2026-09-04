@@ -665,10 +665,11 @@ If an extension cancelled the fork:
 
 #### clone
 
-Duplicate the current active branch into a new session at the current position. Can be cancelled by a `session_before_fork` extension event handler.
+Duplicate the current active branch into a new session at the current position. Can be cancelled by a `session_before_fork` extension event handler. An optional `name` sets the cloned session's display name (like `/name`).
 
 ```json
 {"type": "clone"}
+{"type": "clone", "name": "my clone"}
 ```
 
 Response:

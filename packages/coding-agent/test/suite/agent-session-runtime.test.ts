@@ -394,6 +394,46 @@ describe("AgentSessionRuntime characterization", () => {
 		).toEqual(beforeMessages);
 	});
 
+	it("sets the forked session name when forking with a name", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("hello");
+		await runtime.session.prompt("again");
+
+		const leafId = runtime.session.sessionManager.getLeafId();
+		expect(leafId).toBeTruthy();
+
+		// Without a name, the fork inherits no name.
+		let result = await runtime.fork(leafId!, { position: "at" });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.session.sessionManager.getSessionName()).toBeUndefined();
+
+		// With a name, the forked session carries that name.
+		const namedLeafId = runtime.session.sessionManager.getLeafId();
+		result = await runtime.fork(namedLeafId!, { position: "at", name: "  my clone  " });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.session.sessionManager.getSessionName()).toBe("my clone");
+	});
+
+	it("overrides an inherited session name when forking with a name", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("hello");
+		runtime.session.setSessionName("original");
+
+		const leafId = runtime.session.sessionManager.getLeafId();
+		expect(leafId).toBeTruthy();
+
+		// Plain fork inherits the source name.
+		let result = await runtime.fork(leafId!, { position: "at" });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.session.sessionManager.getSessionName()).toBe("original");
+
+		// Named fork overrides it.
+		const namedLeafId = runtime.session.sessionManager.getLeafId();
+		result = await runtime.fork(namedLeafId!, { position: "at", name: "renamed" });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.session.sessionManager.getSessionName()).toBe("renamed");
+	});
+
 	it("duplicates the current active branch in-memory when forking at the current position", async () => {
 		const tempDir = join(tmpdir(), `pi-runtime-suite-in-memory-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });

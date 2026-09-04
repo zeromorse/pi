@@ -169,7 +169,11 @@ export type NewSessionHandler = (options?: {
 
 export type ForkHandler = (
 	entryId: string,
-	options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+	options?: {
+		position?: "before" | "at";
+		name?: string;
+		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+	},
 ) => Promise<{ cancelled: boolean }>;
 
 export type NavigateTreeHandler = (

@@ -623,7 +623,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				if (!leafId) {
 					return error(id, "clone", "Cannot clone session: no current entry selected");
 				}
-				const result = await runtimeHost.fork(leafId, { position: "at" });
+				const result = await runtimeHost.fork(leafId, { position: "at", name: command.name });
 				if (!result.cancelled) {
 					await rebindSession();
 				}

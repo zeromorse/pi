@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `/clone <name>` to name the cloned session directly; also supported via RPC `clone` command's `name` field and the extension/SDK `fork()` `name` option.
 - Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
 - Added tree entry preview: open a full-detail page for the selected entry in the `/tree` view with `Shift+P`, showing markdown-rendered message text, thinking blocks, highlighted tool call arguments (resolved from the originating assistant message for tool results), tool results, bash commands and output, and summaries, with keyboard scrolling, mouse-wheel scrolling, mouse-drag highlight, and `Ctrl+X` to copy the selection or the whole entry.
 

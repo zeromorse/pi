@@ -3049,9 +3049,10 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/clone") {
+			if (text === "/clone" || text.startsWith("/clone ")) {
+				const name = text.slice("/clone".length).trim() || undefined;
 				this.editor.setText("");
-				await this.handleCloneCommand();
+				await this.handleCloneCommand(name);
 				return;
 			}
 			if (text === "/tree") {
@@ -5167,7 +5168,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleCloneCommand(): Promise<void> {
+	private async handleCloneCommand(name?: string): Promise<void> {
 		const leafId = this.sessionManager.getLeafId();
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
@@ -5175,14 +5176,16 @@ export class InteractiveMode {
 		}
 
 		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
+			const result = await this.runtimeHost.fork(leafId, { position: "at", name });
 			if (result.cancelled) {
 				this.ui.requestRender();
 				return;
 			}
 
 			this.editor.setText("");
-			this.showStatus("Cloned to new session");
+			this.showStatus(
+				name ? `Cloned to new session: ${this.sessionManager.getSessionName() ?? name}` : "Cloned to new session",
+			);
 		} catch (error: unknown) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
