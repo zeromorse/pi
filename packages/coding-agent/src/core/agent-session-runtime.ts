@@ -184,9 +184,23 @@ export class AgentSessionRuntime {
 		this._modelFallbackMessage = result.modelFallbackMessage;
 	}
 
-	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
+	/**
+	 * Apply the next runtime, rebind the host, optionally rename the session,
+	 * then run `withSession`.
+	 *
+	 * The optional name is applied after rebind so UI subscriptions and extension
+	 * contexts are live, and before `withSession` so callbacks observe the named
+	 * session.
+	 */
+	private async finishSessionReplacement(
+		withSession?: (ctx: ReplacedSessionContext) => Promise<void>,
+		sessionName?: string,
+	): Promise<void> {
 		if (this.rebindSession) {
 			await this.rebindSession(this.session);
+		}
+		if (sessionName) {
+			this.session.setSessionName(sessionName);
 		}
 		if (withSession) {
 			await withSession(this.session.createReplacedSessionContext());
@@ -264,7 +278,8 @@ export class AgentSessionRuntime {
 	 *
 	 * When `options.name` is provided and non-empty, the forked session gets
 	 * that display name (appended as a session_info entry, overriding any
-	 * inherited name from the source session).
+	 * inherited name from the source session). The name is applied after the
+	 * host rebinds to the forked session and before `withSession` runs.
 	 */
 	async fork(
 		entryId: string,
@@ -274,19 +289,8 @@ export class AgentSessionRuntime {
 			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 		},
 	): Promise<{ cancelled: boolean; selectedText?: string }> {
-		const result = await this.forkSession(entryId, options);
-		const name = options?.name?.trim();
-		if (!result.cancelled && name) {
-			this.session.setSessionName(name);
-		}
-		return result;
-	}
-
-	private async forkSession(
-		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-	): Promise<{ cancelled: boolean; selectedText?: string }> {
 		const position = options?.position ?? "before";
+		const name = options?.name?.trim() || undefined;
 		const beforeResult = await this.emitBeforeFork(entryId, { position });
 		if (beforeResult.cancelled) {
 			return { cancelled: true };
@@ -328,7 +332,7 @@ export class AgentSessionRuntime {
 						sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 					}),
 				);
-				await this.finishSessionReplacement(options?.withSession);
+				await this.finishSessionReplacement(options?.withSession, name);
 				return { cancelled: false, selectedText };
 			}
 
@@ -351,7 +355,7 @@ export class AgentSessionRuntime {
 					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 				}),
 			);
-			await this.finishSessionReplacement(options?.withSession);
+			await this.finishSessionReplacement(options?.withSession, name);
 			return { cancelled: false, selectedText };
 		}
 
@@ -370,7 +374,7 @@ export class AgentSessionRuntime {
 				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 			}),
 		);
-		await this.finishSessionReplacement(options?.withSession);
+		await this.finishSessionReplacement(options?.withSession, name);
 		return { cancelled: false, selectedText };
 	}
 

@@ -467,6 +467,45 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(runtime.session.sessionManager.getSessionName()).toBe("renamed");
 	});
 
+	it("applies the fork name after rebind and before withSession", async () => {
+		const events: string[] = [];
+		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.on("session_shutdown", () => {
+				events.push("session_shutdown");
+			});
+			pi.on("session_start", () => {
+				events.push("session_start");
+			});
+			pi.on("session_info_changed", () => {
+				events.push("session_info_changed");
+			});
+		});
+		runtime.setRebindSession(async () => {
+			events.push("rebind");
+			await runtime.session.bindExtensions({});
+		});
+
+		await runtime.session.prompt("hello");
+		const leafId = runtime.session.sessionManager.getLeafId();
+		expect(leafId).toBeTruthy();
+
+		events.length = 0;
+		let observedName: string | undefined;
+		const result = await runtime.fork(leafId!, {
+			position: "at",
+			name: "named clone",
+			withSession: async (ctx) => {
+				events.push("withSession");
+				observedName = ctx.sessionManager.getSessionName();
+			},
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(events).toEqual(["session_shutdown", "rebind", "session_start", "session_info_changed", "withSession"]);
+		expect(observedName).toBe("named clone");
+		expect(runtime.session.sessionManager.getSessionName()).toBe("named clone");
+	});
+
 	it("duplicates the current active branch in-memory when forking at the current position", async () => {
 		const tempDir = join(tmpdir(), `pi-runtime-suite-in-memory-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
