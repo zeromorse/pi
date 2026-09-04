@@ -317,7 +317,8 @@ user sends another prompt ◄─────────────────
   ├─► session_before_switch (can cancel)
   ├─► session_shutdown
   ├─► session_start { reason: "new" | "resume", previousSessionFile? }
-  └─► resources_discover { reason: "startup" }
+  ├─► resources_discover { reason: "startup" }
+  └─► session_info_changed (only when /new <name> was given)
 
 /fork or /clone
   ├─► session_before_fork (can cancel)
@@ -1167,6 +1168,7 @@ if (result.cancelled) {
 
 Options:
 - `parentSession`: parent session file to record in the new session header
+- `name`: sets the new session's display name (same as `/name`); applied after `session_start` and before `withSession` runs
 - `setup`: mutate the new session's `SessionManager` before `withSession` runs
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 

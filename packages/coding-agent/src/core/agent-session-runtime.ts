@@ -237,8 +237,16 @@ export class AgentSessionRuntime {
 		return { cancelled: false };
 	}
 
+	/**
+	 * Start a new session, replacing the current one.
+	 *
+	 * When `options.name` is provided and non-empty, the new session gets that
+	 * display name. Like fork names, it is applied after the host rebinds to
+	 * the new session and before `withSession` runs.
+	 */
 	async newSession(options?: {
 		parentSession?: string;
+		name?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }> {
@@ -247,6 +255,7 @@ export class AgentSessionRuntime {
 			return beforeResult;
 		}
 
+		const name = options?.name?.trim() || undefined;
 		const previousSessionFile = this.session.sessionFile;
 		const sessionDir = this.session.sessionManager.getSessionDir();
 		const sessionManager = this.session.sessionManager.isPersisted()
@@ -269,7 +278,7 @@ export class AgentSessionRuntime {
 			await options.setup(this.session.sessionManager);
 			this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
 		}
-		await this.finishSessionReplacement(options?.withSession);
+		await this.finishSessionReplacement(options?.withSession, name);
 		return { cancelled: false };
 	}
 

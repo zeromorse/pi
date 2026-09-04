@@ -43,12 +43,12 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, message delivery, transport, and other preferences |
 | `/resume` | Pick from previous sessions |
-| `/new` | Start a new session |
+| `/new [name]` | Start a new session, optionally with a name |
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
 | `/tree` | Jump to any point in the session and continue from there |
 | `/trust` | Save project trust decision for future sessions |
-| `/fork` | Create a new session from a previous user message |
+| `/fork [name]` | Create a new session from a previous user message, optionally with a name |
 | `/clone [name]` | Duplicate the current active branch into a new session, optionally with a name |
 | `/compact [prompt]` | Manually compact context, optionally with custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
@@ -90,7 +90,7 @@ Useful session commands:
 
 - `/session` shows the current session file and ID.
 - `/tree` navigates the in-file session tree and can summarize abandoned branches.
-- `/fork` creates a new session from an earlier user message.
+- `/fork` creates a new session from an earlier user message. `/fork <name>`, `/clone <name>`, and `/new <name>` name the new session directly (same as `/name`).
 - `/clone [name]` duplicates the current active branch into a new session file, optionally with a name.
 - `/compact` summarizes older messages to free context.
 

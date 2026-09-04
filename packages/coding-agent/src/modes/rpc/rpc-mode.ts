@@ -436,7 +436,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			case "new_session": {
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
-				const result = await runtimeHost.newSession(options);
+				const result = await runtimeHost.newSession({ ...options, name: command.name });
 				if (!result.cancelled) {
 					await rebindSession();
 				}
@@ -611,7 +611,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "fork": {
-				const result = await runtimeHost.fork(command.entryId);
+				const result = await runtimeHost.fork(command.entryId, command.name ? { name: command.name } : undefined);
 				if (!result.cancelled) {
 					await rebindSession();
 				}

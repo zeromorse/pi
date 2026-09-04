@@ -159,7 +159,7 @@ To implement interactive Esc behavior, send `clear_queue` before `abort`, then r
 
 #### new_session
 
-Start a fresh session. Can be cancelled by a `session_before_switch` extension event handler.
+Start a fresh session. Can be cancelled by a `session_before_switch` extension event handler. An optional `name` sets the new session's display name (like `/name`).
 
 ```json
 {"type": "new_session"}
@@ -637,7 +637,7 @@ If an extension cancelled the switch:
 
 #### fork
 
-Create a new fork from a previous user message on the active branch. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
+Create a new fork from a previous user message on the active branch. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from. An optional `name` sets the forked session's display name (like `/name`).
 
 ```json
 {"type": "fork", "entryId": "abc123"}

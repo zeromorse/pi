@@ -467,6 +467,42 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(runtime.session.sessionManager.getSessionName()).toBe("renamed");
 	});
 
+	it("sets the new session name when starting a session with a name", async () => {
+		const events: string[] = [];
+		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.on("session_shutdown", () => {
+				events.push("session_shutdown");
+			});
+			pi.on("session_start", () => {
+				events.push("session_start");
+			});
+			pi.on("session_info_changed", () => {
+				events.push("session_info_changed");
+			});
+		});
+		runtime.setRebindSession(async () => {
+			events.push("rebind");
+			await runtime.session.bindExtensions({});
+		});
+
+		await runtime.session.prompt("hello");
+
+		events.length = 0;
+		let observedName: string | undefined;
+		const result = await runtime.newSession({
+			name: "fresh start",
+			withSession: async (ctx) => {
+				events.push("withSession");
+				observedName = ctx.sessionManager.getSessionName();
+			},
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(events).toEqual(["session_shutdown", "rebind", "session_start", "session_info_changed", "withSession"]);
+		expect(observedName).toBe("fresh start");
+		expect(runtime.session.sessionManager.getSessionName()).toBe("fresh start");
+	});
+
 	it("applies the fork name after rebind and before withSession", async () => {
 		const events: string[] = [];
 		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {

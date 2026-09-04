@@ -231,10 +231,11 @@ export class RpcClient {
 	/**
 	 * Start a new session, optionally with parent tracking.
 	 * @param parentSession - Optional parent session path for lineage tracking
+	 * @param name - Optional display name for the new session
 	 * @returns Object with `cancelled: true` if an extension cancelled the new session
 	 */
-	async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
-		const response = await this.send({ type: "new_session", parentSession });
+	async newSession(parentSession?: string, name?: string): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "new_session", parentSession, name });
 		return this.getData(response);
 	}
 
@@ -384,8 +385,8 @@ export class RpcClient {
 	 * Fork from a specific message.
 	 * @returns Object with `text` (the message text) and `cancelled` (if extension cancelled)
 	 */
-	async fork(entryId: string): Promise<{ text: string; cancelled: boolean }> {
-		const response = await this.send({ type: "fork", entryId });
+	async fork(entryId: string, name?: string): Promise<{ text: string; cancelled: boolean }> {
+		const response = await this.send({ type: "fork", entryId, name });
 		return this.getData(response);
 	}
 

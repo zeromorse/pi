@@ -24,11 +24,11 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 | Command | Description |
 |---------|-------------|
 | `/resume` | Browse and select previous sessions |
-| `/new` | Start a new session |
+| `/new [name]` | Start a new session, optionally with a name |
 | `/name <name>` | Set the current session display name |
 | `/session` | Show session info |
 | `/tree` | Navigate the current session tree |
-| `/fork` | Create a new session from a previous user message |
+| `/fork [name]` | Create a new session from a previous user message, optionally with a name |
 | `/clone [name]` | Duplicate the current active branch into a new session, optionally with a name |
 | `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
 | `/export [file]` | Export session to HTML |
@@ -130,7 +130,7 @@ Selecting the root user message resets the leaf to an empty conversation and pla
 | Typical use | Explore alternatives in place | Start a new session from an earlier prompt | Duplicate current work before continuing |
 | Summary | Optional branch summary | None | None |
 
-Use `/tree` when you want to keep alternatives together. Use `/fork` or `/clone` when you want a separate session file. `/clone <name>` also sets the new session's display name (same as `/name`); without it, the clone inherits the source session's name.
+Use `/tree` when you want to keep alternatives together. Use `/fork` or `/clone` when you want a separate session file. `/fork <name>` and `/clone <name>` also set the new session's display name (same as `/name`); without a name, the fork or clone inherits the source session's name. `/new <name>` names the new session the same way.
 
 ## Branch Summaries
 

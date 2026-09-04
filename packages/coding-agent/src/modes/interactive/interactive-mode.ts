@@ -3030,8 +3030,9 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/fork") {
-				this.showUserMessageSelector();
+			if (text === "/fork" || text.startsWith("/fork ")) {
+				const name = text.slice("/fork".length).trim() || undefined;
+				this.showUserMessageSelector(name);
 				this.editor.setText("");
 				return;
 			}
@@ -3062,9 +3063,10 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/new") {
+			if (text === "/new" || text.startsWith("/new ")) {
+				const name = text.slice("/new".length).trim() || undefined;
 				this.editor.setText("");
-				await this.handleClearCommand();
+				await this.handleClearCommand(name);
 				return;
 			}
 			if (text === "/compact" || text.startsWith("/compact ")) {
@@ -5147,7 +5149,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
+	private showUserMessageSelector(name?: string): void {
 		const userMessages = this.session.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
@@ -5163,14 +5165,18 @@ export class InteractiveMode {
 				async (entryId) => {
 					done();
 					try {
-						const result = await this.runtimeHost.fork(entryId);
+						const result = await this.runtimeHost.fork(entryId, name ? { name } : undefined);
 						if (result.cancelled) {
 							this.ui.requestRender();
 							return;
 						}
 
 						this.editor.setText(result.selectedText ?? "");
-						this.showStatus("Forked to new session");
+						this.showStatus(
+							name
+								? `Forked to new session: ${this.sessionManager.getSessionName() ?? name}`
+								: "Forked to new session",
+						);
 					} catch (error: unknown) {
 						this.showError(error instanceof Error ? error.message : String(error));
 					}
@@ -6428,15 +6434,21 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private async handleClearCommand(): Promise<void> {
+	private async handleClearCommand(name?: string): Promise<void> {
 		this.clearStatusIndicator();
 		try {
-			const result = await this.runtimeHost.newSession();
+			const result = await this.runtimeHost.newSession(name ? { name } : undefined);
 			if (result.cancelled) {
 				return;
 			}
 			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
+			this.chatContainer.addChild(
+				new Text(
+					`${theme.fg("accent", name ? `✓ New session started: ${this.sessionManager.getSessionName() ?? name}` : "✓ New session started")}`,
+					1,
+					1,
+				),
+			);
 			this.ui.requestRender();
 		} catch (error: unknown) {
 			await this.handleFatalRuntimeError("Failed to create session", error);
