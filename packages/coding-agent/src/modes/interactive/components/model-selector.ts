@@ -23,6 +23,11 @@ interface ModelItem {
 	model: Model<any>;
 }
 
+interface ProviderItem {
+	provider: string;
+	count: number;
+}
+
 interface ScopedModelItem {
 	model: Model<any>;
 	thinkingLevel?: string;
@@ -36,7 +41,12 @@ interface DefaultModelReference {
 type ModelScope = "all" | "scoped";
 
 /**
- * Component that renders a model selector with search
+ * Component that renders a model selector with search.
+ *
+ * Navigation is two-level: the provider list is shown first and Enter drills
+ * into that provider's models. Typing from the provider list immediately jumps
+ * to a cross-provider model search; clearing the query returns to the provider
+ * list. A single available provider is skipped straight to its models.
  */
 export class ModelSelectorComponent extends Container implements Focusable {
 	private searchInput: Input;
@@ -54,8 +64,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private allModels: ModelItem[] = [];
 	private scopedModelItems: ModelItem[] = [];
 	private activeModels: ModelItem[] = [];
+	private providerItems: ProviderItem[] = [];
 	private filteredModels: ModelItem[] = [];
-	private selectedIndex: number = 0;
+	private providerSelectedIndex: number = 0;
+	private modelSelectedIndex: number = 0;
+	private selectedProvider?: string;
 	private currentModel?: Model<any>;
 	private modelRuntime: ModelRuntime;
 	private onSelectCallback: (model: Model<any>) => void;
@@ -70,6 +83,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private scope: ModelScope = "all";
 	private scopeText?: Text;
 	private scopeHintText?: Text;
+	private hintText?: Text;
 	private readonly refreshAbortController = new AbortController();
 	private refreshTimeout?: ReturnType<typeof setTimeout>;
 	private closed = false;
@@ -119,9 +133,13 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.searchInput.setValue(initialSearchInput);
 		}
 		this.searchInput.onSubmit = () => {
-			// Enter on search input selects the first filtered item
-			if (this.filteredModels[this.selectedIndex]) {
-				this.handleSelect(this.filteredModels[this.selectedIndex].model);
+			if (this.isProviderView()) {
+				const item = this.providerItems[this.providerSelectedIndex];
+				if (item) {
+					this.enterProvider(item.provider);
+				}
+			} else if (this.filteredModels[this.modelSelectedIndex]) {
+				this.handleSelect(this.filteredModels[this.modelSelectedIndex]!.model);
 			}
 		};
 		this.addChild(this.searchInput);
@@ -136,9 +154,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 		// Hint
 		if (this.onSelectAsDefaultCallback) {
-			this.addChild(
-				new Text(theme.fg("dim", "  Enter to select \u00b7 Ctrl+S to set as default \u00b7 Esc to cancel"), 0, 0),
-			);
+			this.hintText = new Text("", 0, 0);
+			this.addChild(this.hintText);
 		}
 
 		// Add bottom border
@@ -146,8 +163,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 		// Render the current snapshot immediately, then refresh in the background.
 		this.loadModelsFromSnapshot();
-		if (initialSearchInput) this.filterModels(initialSearchInput);
-		else this.updateList();
 		this.tui.requestRender();
 		void this.refreshModels();
 	}
@@ -169,10 +184,32 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			model: scoped.model,
 		}));
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
-		this.filteredModels = this.activeModels;
-		const currentIndex = this.filteredModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
-		this.selectedIndex =
-			currentIndex >= 0 ? currentIndex : Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
+		this.buildProviderItems();
+		this.reconcile();
+	}
+
+	private buildProviderItems(): void {
+		const counts = new Map<string, number>();
+		for (const item of this.activeModels) {
+			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
+		}
+		const items = [...counts.entries()].map(([provider, count]) => ({ provider, count }));
+		// Sort: the provider of the current model first, then the default
+		// model's provider, then by first appearance (which already reflects
+		// alphabetical order for the full model list and the user's scoped
+		// model order otherwise).
+		items.sort((a, b) => {
+			const aIsCurrent = a.provider === this.currentModel?.provider;
+			const bIsCurrent = b.provider === this.currentModel?.provider;
+			if (aIsCurrent && !bIsCurrent) return -1;
+			if (!aIsCurrent && bIsCurrent) return 1;
+			const aIsDefault = a.provider === this.defaultModel?.provider;
+			const bIsDefault = b.provider === this.defaultModel?.provider;
+			if (aIsDefault && !bIsDefault) return -1;
+			if (!aIsDefault && bIsDefault) return 1;
+			return 0;
+		});
+		this.providerItems = items;
 	}
 
 	private async refreshModels(): Promise<void> {
@@ -200,7 +237,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				}
 			}
 			this.loadModelsFromSnapshot();
-			this.filterModels(this.searchInput.getValue());
 			this.tui.requestRender();
 		} catch (error) {
 			if (this.closed) return;
@@ -261,23 +297,96 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private setScope(scope: ModelScope): void {
 		if (this.scope === scope) return;
 		this.scope = scope;
-		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
-		const currentIndex = this.activeModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
-		this.selectedIndex = currentIndex >= 0 ? currentIndex : 0;
-		this.filterModels(this.searchInput.getValue());
+		this.loadModelsFromSnapshot();
 		if (this.scopeText) {
 			this.scopeText.setText(this.getScopeText());
 		}
 	}
 
-	private filterModels(query: string): void {
+	/**
+	 * The provider list is shown whenever there is no search query and no
+	 * provider has been drilled into yet.
+	 */
+	private isProviderView(): boolean {
+		return this.selectedProvider === undefined && this.searchInput.getValue().trim().length === 0;
+	}
+
+	/** The search box contents, ignoring whitespace-only input. */
+	private searchText(): string {
+		return this.searchInput.getValue().trim();
+	}
+
+	/** Models that the model list shows: all of them or just the drilled provider. */
+	private modelSource(): ModelItem[] {
+		if (this.selectedProvider !== undefined) {
+			return this.activeModels.filter((item) => item.provider === this.selectedProvider);
+		}
+		return this.activeModels;
+	}
+
+	/**
+	 * After a snapshot reload: keep or restore a consistent view.
+	 * - With a search query keep the global/provider-scoped search.
+	 * - Otherwise validate the drilled provider, auto-enter the sole provider,
+	 *   and restore a sensible selection for the current view.
+	 */
+	private reconcile(): void {
+		const query = this.searchText();
 		if (query) {
-			const filtered = fuzzyFilter(this.activeModels, query, (item) => {
+			this.filterModels(query);
+			return;
+		}
+		if (
+			this.selectedProvider !== undefined &&
+			!this.providerItems.some((p) => p.provider === this.selectedProvider)
+		) {
+			this.selectedProvider = undefined;
+		}
+		if (this.selectedProvider === undefined && this.providerItems.length === 1) {
+			// Single available provider: go straight to its model list.
+			this.selectedProvider = this.providerItems[0]!.provider;
+		}
+		if (this.isProviderView()) {
+			if (this.providerSelectedIndex >= this.providerItems.length) {
+				const currentIndex = this.providerItems.findIndex((p) => p.provider === this.currentModel?.provider);
+				this.providerSelectedIndex = currentIndex >= 0 ? currentIndex : Math.max(0, this.providerItems.length - 1);
+			}
+			this.updateList();
+			return;
+		}
+		const source = this.modelSource();
+		const currentIndex = source.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
+		this.modelSelectedIndex =
+			currentIndex >= 0 ? currentIndex : Math.min(this.modelSelectedIndex, Math.max(0, source.length - 1));
+		this.filterModels("");
+	}
+
+	private enterProvider(provider: string): void {
+		this.selectedProvider = provider;
+		this.searchInput.setValue("");
+		this.filterModels("");
+	}
+
+	private backToProviders(): void {
+		const previous = this.selectedProvider;
+		this.selectedProvider = undefined;
+		if (previous !== undefined) {
+			const index = this.providerItems.findIndex((p) => p.provider === previous);
+			if (index >= 0) this.providerSelectedIndex = index;
+		}
+		this.updateList();
+	}
+
+	private filterModels(query: string): void {
+		const effectiveQuery = query.trim();
+		const source = this.modelSource();
+		if (effectiveQuery) {
+			const filtered = fuzzyFilter(source, effectiveQuery, (item) => {
 				const defaultText = this.isDefaultModel(item.model) ? " default" : "";
 				return `${getModelSelectorSearchText({ id: item.id, provider: item.provider, name: item.model.name })}${defaultText}`;
 			});
-			if (this.isDefaultSearch(query)) {
-				const defaultItems = this.activeModels.filter((item) => this.isDefaultModel(item.model));
+			if (this.isDefaultSearch(effectiveQuery)) {
+				const defaultItems = source.filter((item) => this.isDefaultModel(item.model));
 				const defaultKeys = new Set(defaultItems.map((item) => `${item.provider}\0${item.id}`));
 				this.filteredModels = [
 					...defaultItems,
@@ -287,22 +396,73 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				this.filteredModels = filtered;
 			}
 		} else {
-			this.filteredModels = this.activeModels;
+			this.filteredModels = source;
 		}
 		// When filtering by a query, move the selector to the top row so the best
 		// match is highlighted. When the query is cleared, keep the current position
 		// clamped to the (restored) list length.
-		this.selectedIndex = query ? 0 : Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
+		this.modelSelectedIndex = effectiveQuery
+			? 0
+			: Math.min(this.modelSelectedIndex, Math.max(0, this.filteredModels.length - 1));
 		this.updateList();
 	}
 
 	private updateList(): void {
+		if (this.isProviderView()) {
+			this.renderProviderList();
+		} else {
+			this.renderModelList();
+		}
+	}
+
+	private renderProviderList(): void {
 		this.listContainer.clear();
 
 		const maxVisible = 10;
 		const startIndex = Math.max(
 			0,
-			Math.min(this.selectedIndex - Math.floor(maxVisible / 2), this.filteredModels.length - maxVisible),
+			Math.min(this.providerSelectedIndex - Math.floor(maxVisible / 2), this.providerItems.length - maxVisible),
+		);
+		const endIndex = Math.min(startIndex + maxVisible, this.providerItems.length);
+
+		for (let i = startIndex; i < endIndex; i++) {
+			const item = this.providerItems[i];
+			if (!item) continue;
+
+			const isSelected = i === this.providerSelectedIndex;
+			const isCurrentProvider = this.currentModel?.provider === item.provider;
+			const isDefaultProvider = this.defaultModel?.provider === item.provider;
+
+			const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
+			const currentMarker = isCurrentProvider ? theme.fg("accent", "✓ ") : "  ";
+			const providerText = isSelected ? theme.fg("accent", item.provider) : item.provider;
+			const countBadge = theme.fg("muted", ` (${item.count})`);
+			const defaultBadge = isDefaultProvider ? theme.fg("muted", " · default") : "";
+			const line = `${cursor}${currentMarker}${providerText}${countBadge}${defaultBadge}`;
+
+			this.listContainer.addChild(new Text(line, 0, 0));
+		}
+
+		// Add scroll indicator if needed
+		if (startIndex > 0 || endIndex < this.providerItems.length) {
+			const scrollInfo = theme.fg("muted", `  (${this.providerSelectedIndex + 1}/${this.providerItems.length})`);
+			this.listContainer.addChild(new Text(scrollInfo, 0, 0));
+		}
+
+		this.appendStatusLines(
+			this.providerItems.length === 0,
+			"No providers configured. Use /login to add providers.",
+			undefined,
+		);
+	}
+
+	private renderModelList(): void {
+		this.listContainer.clear();
+
+		const maxVisible = 10;
+		const startIndex = Math.max(
+			0,
+			Math.min(this.modelSelectedIndex - Math.floor(maxVisible / 2), this.filteredModels.length - maxVisible),
 		);
 		const endIndex = Math.min(startIndex + maxVisible, this.filteredModels.length);
 
@@ -311,7 +471,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const item = this.filteredModels[i];
 			if (!item) continue;
 
-			const isSelected = i === this.selectedIndex;
+			const isSelected = i === this.modelSelectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
 			const isDefault = this.isDefaultModel(item.model);
 			const defaultBadge = isDefault ? theme.fg("muted", " · default") : "";
@@ -327,23 +487,31 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 		// Add scroll indicator if needed
 		if (startIndex > 0 || endIndex < this.filteredModels.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.filteredModels.length})`);
+			const scrollInfo = theme.fg("muted", `  (${this.modelSelectedIndex + 1}/${this.filteredModels.length})`);
 			this.listContainer.addChild(new Text(scrollInfo, 0, 0));
 		}
 
-		// Show error message or "no results" if empty
+		const selected = this.filteredModels[this.modelSelectedIndex];
+		this.appendStatusLines(
+			this.filteredModels.length === 0,
+			"No matching models",
+			selected ? `  Model Name: ${selected.model.name}` : undefined,
+		);
+	}
+
+	/** Error / empty-list / model-name / refresh messages shared by both lists. */
+	private appendStatusLines(empty: boolean, noResultsText: string, modelNameLine?: string): void {
 		if (this.errorMessage) {
 			// Show error in red
 			const errorLines = this.errorMessage.split("\n");
 			for (const line of errorLines) {
 				this.listContainer.addChild(new Text(theme.fg("error", line), 0, 0));
 			}
-		} else if (this.filteredModels.length === 0) {
-			this.listContainer.addChild(new Text(theme.fg("muted", "  No matching models"), 0, 0));
-		} else {
-			const selected = this.filteredModels[this.selectedIndex];
+		} else if (empty) {
+			this.listContainer.addChild(new Text(theme.fg("muted", `  ${noResultsText}`), 0, 0));
+		} else if (modelNameLine) {
 			this.listContainer.addChild(new Spacer(1));
-			this.listContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`), 0, 0));
+			this.listContainer.addChild(new Text(theme.fg("muted", modelNameLine), 0, 0));
 		}
 		if (this.refreshStatusMessage) {
 			this.listContainer.addChild(new Spacer(1));
@@ -351,10 +519,27 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				new Text(theme.fg(this.refreshStatusSuccess ? "success" : "muted", `  ${this.refreshStatusMessage}`), 0, 0),
 			);
 		}
+		this.updateHintText();
+	}
+
+	private updateHintText(): void {
+		if (!this.hintText) return;
+		const query = this.searchText();
+		let hint: string;
+		if (this.isProviderView()) {
+			hint = "Enter to browse models · Esc to cancel";
+		} else if (query) {
+			hint = "Enter to select · Ctrl+S sets as default · Esc to clear";
+		} else {
+			hint = "Enter to select · Ctrl+S sets as default · Esc or Backspace to pick another provider";
+		}
+		this.hintText.setText(theme.fg("dim", `  ${hint}`));
 	}
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
+		const providerView = this.isProviderView();
+
 		if (kb.matches(keyData, "tui.input.tab")) {
 			if (this.scopedModelItems.length > 0) {
 				const nextScope: ModelScope = this.scope === "all" ? "scoped" : "all";
@@ -365,43 +550,108 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			}
 			return;
 		}
+
+		if (kb.matches(keyData, "tui.select.cancel")) {
+			// Ctrl+C always closes the whole selector. Escape closes from the
+			// provider list; inside a model list it clears the query first and
+			// otherwise steps back up to the provider list.
+			if (matchesKey(keyData, "ctrl+c") || providerView) {
+				this.dispose();
+				this.onCancelCallback();
+				return;
+			}
+			if (this.searchText()) {
+				this.searchInput.setValue("");
+				this.filterModels("");
+				return;
+			}
+			// A single provider's list is skipped on entry, so there is no
+			// provider list to step back to: Escape closes the selector.
+			if (this.providerItems.length === 1) {
+				this.dispose();
+				this.onCancelCallback();
+				return;
+			}
+			this.backToProviders();
+			return;
+		}
+
 		// Up arrow - wrap to bottom when at top
 		if (kb.matches(keyData, "tui.select.up")) {
-			if (this.filteredModels.length === 0) return;
-			this.selectedIndex = this.selectedIndex === 0 ? this.filteredModels.length - 1 : this.selectedIndex - 1;
+			if (providerView) {
+				if (this.providerItems.length === 0) return;
+				this.providerSelectedIndex =
+					this.providerSelectedIndex === 0 ? this.providerItems.length - 1 : this.providerSelectedIndex - 1;
+			} else {
+				if (this.filteredModels.length === 0) return;
+				this.modelSelectedIndex =
+					this.modelSelectedIndex === 0 ? this.filteredModels.length - 1 : this.modelSelectedIndex - 1;
+			}
 			this.updateList();
+			return;
 		}
+
 		// Down arrow - wrap to top when at bottom
-		else if (kb.matches(keyData, "tui.select.down")) {
-			if (this.filteredModels.length === 0) return;
-			this.selectedIndex = this.selectedIndex === this.filteredModels.length - 1 ? 0 : this.selectedIndex + 1;
+		if (kb.matches(keyData, "tui.select.down")) {
+			if (providerView) {
+				if (this.providerItems.length === 0) return;
+				this.providerSelectedIndex =
+					this.providerSelectedIndex === this.providerItems.length - 1 ? 0 : this.providerSelectedIndex + 1;
+			} else {
+				if (this.filteredModels.length === 0) return;
+				this.modelSelectedIndex =
+					this.modelSelectedIndex === this.filteredModels.length - 1 ? 0 : this.modelSelectedIndex + 1;
+			}
 			this.updateList();
+			return;
 		}
+
 		// Enter
-		else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selectedModel = this.filteredModels[this.selectedIndex];
-			if (selectedModel) {
-				this.handleSelect(selectedModel.model);
+		if (kb.matches(keyData, "tui.select.confirm")) {
+			if (providerView) {
+				const item = this.providerItems[this.providerSelectedIndex];
+				if (item) {
+					this.enterProvider(item.provider);
+				}
+			} else {
+				const selectedModel = this.filteredModels[this.modelSelectedIndex];
+				if (selectedModel) {
+					this.handleSelect(selectedModel.model);
+				}
 			}
+			return;
 		}
-		// Escape or Ctrl+C
-		else if (kb.matches(keyData, "tui.select.cancel")) {
-			this.dispose();
-			this.onCancelCallback();
-		}
+
 		// Ctrl+S — select and save as default
-		else if (matchesKey(keyData, "ctrl+s") && this.onSelectAsDefaultCallback) {
-			const selectedModel = this.filteredModels[this.selectedIndex];
-			if (selectedModel) {
-				this.dispose();
-				this.onSelectAsDefaultCallback(selectedModel.model);
+		if (matchesKey(keyData, "ctrl+s") && this.onSelectAsDefaultCallback) {
+			if (!providerView) {
+				const selectedModel = this.filteredModels[this.modelSelectedIndex];
+				if (selectedModel) {
+					this.dispose();
+					this.onSelectAsDefaultCallback(selectedModel.model);
+				}
 			}
+			return;
 		}
+
+		// Backspace on an empty search while browsing a provider returns to the
+		// provider list (otherwise the key only edits the search box).
+		if (
+			!providerView &&
+			this.searchInput.getValue().trim().length === 0 &&
+			this.selectedProvider !== undefined &&
+			kb.matches(keyData, "tui.editor.deleteCharBackward")
+		) {
+			// A single provider has no provider list to step back to; leave the
+			// empty Backspace as a no-op.
+			if (this.providerItems.length === 1) return;
+			this.backToProviders();
+			return;
+		}
+
 		// Pass everything else to search input
-		else {
-			this.searchInput.handleInput(keyData);
-			this.filterModels(this.searchInput.getValue());
-		}
+		this.searchInput.handleInput(keyData);
+		this.filterModels(this.searchInput.getValue());
 	}
 
 	private handleSelect(model: Model<any>): void {
