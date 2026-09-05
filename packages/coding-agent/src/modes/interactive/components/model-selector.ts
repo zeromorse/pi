@@ -47,7 +47,7 @@ type ModelScope = "all" | "scoped";
  * into that provider's models. Typing from the provider list immediately jumps
  * to a cross-provider model search; clearing the query returns to the provider
  * list. A single available provider is skipped straight to its models, as is
- * the current model's provider when it has a single model.
+ * any provider that has a single model.
  */
 export class ModelSelectorComponent extends Container implements Focusable {
 	private searchInput: Input;
@@ -348,11 +348,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				// Single available provider: go straight to its model list.
 				this.selectedProvider = this.providerItems[0]!.provider;
 			} else {
-				// The current model's provider with a single model is shown
-				// directly rather than requiring an extra provider step.
-				const current = this.providerItems.find((p) => p.provider === this.currentModel?.provider);
-				if (current && current.count === 1) {
-					this.selectedProvider = current.provider;
+				// When exactly one provider has a single model, show it directly
+				// rather than requiring an extra provider step.
+				const singleModelProviders = this.providerItems.filter((p) => p.count === 1);
+				if (singleModelProviders.length === 1) {
+					this.selectedProvider = singleModelProviders[0]!.provider;
 				}
 			}
 		}

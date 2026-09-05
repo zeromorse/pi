@@ -151,7 +151,10 @@ describe("two-level provider → model navigation", () => {
 				{ id: "alpha-1", name: "Alpha One" },
 				{ id: "alpha-2", name: "Alpha Two" },
 			],
-			beta: [{ id: "beta-1", name: "Beta One" }],
+			beta: [
+				{ id: "beta-1", name: "Beta One" },
+				{ id: "beta-2", name: "Beta Two" },
+			],
 		});
 		tempDirs.push(tempDir);
 
@@ -178,7 +181,7 @@ describe("two-level provider → model navigation", () => {
 		// Provider list: both providers with their model counts, current provider first.
 		let lines = renderLines(selector);
 		expect(lines.some((l) => l.includes("alpha (2)"))).toBe(true);
-		expect(lines.some((l) => l.includes("beta (1)"))).toBe(true);
+		expect(lines.some((l) => l.includes("beta (2)"))).toBe(true);
 		// No model rows are rendered while browsing providers.
 		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(false);
 		expect(lines.some((l) => l.includes("beta-1 [beta]"))).toBe(false);
@@ -244,7 +247,10 @@ describe("two-level provider → model navigation", () => {
 				{ id: "alpha-1", name: "Alpha One" },
 				{ id: "alpha-2", name: "Alpha Two" },
 			],
-			beta: [{ id: "beta-1", name: "Beta One" }],
+			beta: [
+				{ id: "beta-1", name: "Beta One" },
+				{ id: "beta-2", name: "Beta Two" },
+			],
 		});
 		tempDirs.push(tempDir);
 
@@ -313,7 +319,7 @@ describe("two-level provider → model navigation", () => {
 		selector.dispose();
 	});
 
-	it("drills straight into the current provider when it has a single model", async () => {
+	it("drills straight into a provider with a single model regardless of the current model", async () => {
 		const { runtime, tempDir } = await runtimeWithModels({
 			alpha: [{ id: "alpha-1", name: "Alpha One" }],
 			beta: [
@@ -323,18 +329,20 @@ describe("two-level provider → model navigation", () => {
 		});
 		tempDirs.push(tempDir);
 
+		// The current model belongs to beta (multi-model); alpha is the
+		// single-model provider that should still be shown directly.
 		const selector = new ModelSelectorComponent(
 			createFakeTui(),
-			runtime.getModel("alpha", "alpha-1"),
+			runtime.getModel("beta", "beta-1"),
 			runtime,
 			[],
 			() => {},
 			() => {},
 		);
 
-		// The current provider's single model is listed directly, without the
-		// provider list in between.
 		const lines = renderLines(selector);
+		// The single-model provider's model is listed directly, without the
+		// provider list in between.
 		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(true);
 		expect(lines.some((l) => l.includes("alpha (1)"))).toBe(false);
 		selector.dispose();
