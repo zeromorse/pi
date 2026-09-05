@@ -319,7 +319,7 @@ describe("two-level provider → model navigation", () => {
 		selector.dispose();
 	});
 
-	it("drills straight into a provider with a single model regardless of the current model", async () => {
+	it("shows the provider list even when a provider has a single model", async () => {
 		const { runtime, tempDir } = await runtimeWithModels({
 			alpha: [{ id: "alpha-1", name: "Alpha One" }],
 			beta: [
@@ -329,8 +329,9 @@ describe("two-level provider → model navigation", () => {
 		});
 		tempDirs.push(tempDir);
 
-		// The current model belongs to beta (multi-model); alpha is the
-		// single-model provider that should still be shown directly.
+		// The current model belongs to beta (multi-model); alpha is a
+		// single-model provider that must still be reached through the
+		// provider list.
 		const selector = new ModelSelectorComponent(
 			createFakeTui(),
 			runtime.getModel("beta", "beta-1"),
@@ -341,10 +342,17 @@ describe("two-level provider → model navigation", () => {
 		);
 
 		const lines = renderLines(selector);
-		// The single-model provider's model is listed directly, without the
-		// provider list in between.
-		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(true);
-		expect(lines.some((l) => l.includes("alpha (1)"))).toBe(false);
+		// Selection is strictly two-level: the provider list is shown first,
+		// even when exactly one provider has a single model.
+		expect(lines.some((l) => l.includes("alpha (1)"))).toBe(true);
+		expect(lines.some((l) => l.includes("beta (2)"))).toBe(true);
+		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(false);
+
+		// Enter on the single-model provider still drills into its model.
+		selector.handleInput("\x1b[B"); // move to alpha
+		selector.handleInput("\r");
+		const drilled = renderLines(selector);
+		expect(drilled.some((l) => l.includes("alpha-1 [alpha]"))).toBe(true);
 		selector.dispose();
 	});
 });

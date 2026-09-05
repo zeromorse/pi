@@ -46,8 +46,7 @@ type ModelScope = "all" | "scoped";
  * Navigation is two-level: the provider list is shown first and Enter drills
  * into that provider's models. Typing from the provider list immediately jumps
  * to a cross-provider model search; clearing the query returns to the provider
- * list. A single available provider is skipped straight to its models, as is
- * any provider that has a single model.
+ * list. A single available provider is skipped straight to its models.
  */
 export class ModelSelectorComponent extends Container implements Focusable {
 	private searchInput: Input;
@@ -343,18 +342,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		) {
 			this.selectedProvider = undefined;
 		}
-		if (this.selectedProvider === undefined) {
-			if (this.providerItems.length === 1) {
-				// Single available provider: go straight to its model list.
-				this.selectedProvider = this.providerItems[0]!.provider;
-			} else {
-				// When exactly one provider has a single model, show it directly
-				// rather than requiring an extra provider step.
-				const singleModelProviders = this.providerItems.filter((p) => p.count === 1);
-				if (singleModelProviders.length === 1) {
-					this.selectedProvider = singleModelProviders[0]!.provider;
-				}
-			}
+		if (this.selectedProvider === undefined && this.providerItems.length === 1) {
+			// Single available provider: go straight to its model list.
+			this.selectedProvider = this.providerItems[0]!.provider;
 		}
 		if (this.isProviderView()) {
 			if (this.providerSelectedIndex >= this.providerItems.length) {
