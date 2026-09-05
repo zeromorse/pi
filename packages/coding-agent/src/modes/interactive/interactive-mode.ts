@@ -3124,8 +3124,33 @@ export class InteractiveMode {
 				}
 			}
 
+			// "/btw" (or "btw") asks a side question. While the agent runs, the answer
+			// streams back immediately via a one-off LLM call, without interrupting the
+			// agent or entering the session history. When idle, the message is sent as a
+			// normal prompt.
+			let btwText: string | undefined;
+			const btwMatch = /^\/btw[\s:,，：]+|^btw[\s:,，：]+/i.exec(text);
+			if (btwMatch) {
+				const stripped = text.slice(btwMatch[0].length).trim();
+				if (!stripped) {
+					this.editor.setText("");
+					this.showStatus('Add a message after "btw" to ask a side question.');
+					return;
+				}
+				btwText = stripped;
+			}
+
 			// Queue input during compaction (extension commands execute immediately)
 			if (this.session.isCompacting) {
+				if (btwText !== undefined) {
+					// Side questions work while compacting too: the context snapshot is the
+					// pre-compaction branch, which is still valid until compaction finishes.
+					this.editor.addToHistory?.(text);
+					this.editor.setText("");
+					void this.runSideQuestion(btwText);
+					this.ui.requestRender();
+					return;
+				}
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
 					this.editor.setText("");
@@ -3136,15 +3161,24 @@ export class InteractiveMode {
 				return;
 			}
 
-			// If streaming, use prompt() with steer behavior
+			// If streaming, use prompt() with steer behavior; "/btw" runs a side question instead
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				if (btwText !== undefined) {
+					void this.runSideQuestion(btwText);
+				} else {
+					await this.session.prompt(text, { streamingBehavior: "steer" });
+				}
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
+			}
+
+			// Normal message submission; strip the "btw" prefix when present
+			if (btwText !== undefined) {
+				text = btwText;
 			}
 
 			// Normal message submission
@@ -4155,6 +4189,53 @@ export class InteractiveMode {
 		else if (this.editor.onSubmit) {
 			this.editor.setText("");
 			this.editor.onSubmit(text);
+		}
+	}
+
+	/**
+	 * Run a one-off side question ("/btw") while the agent is busy. Renders the
+	 * question and the streaming answer into the chat without touching the
+	 * session history or interrupting the agent. The result is transient: it
+	 * disappears when the transcript is rebuilt (tree navigation, session switch).
+	 */
+	private async runSideQuestion(question: string): Promise<void> {
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		this.chatContainer.addChild(
+			new UserMessageComponent(
+				`(btw) ${question}`,
+				this.getMarkdownThemeWithSettings(),
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			),
+		);
+		const component = new AssistantMessageComponent(
+			undefined,
+			this.hideThinkingBlock,
+			this.getMarkdownThemeWithSettings(),
+			this.hiddenThinkingLabel,
+			this.outputPad,
+			this.getMarkdownTransformers(),
+		);
+		this.chatContainer.addChild(component);
+		this.ui.requestRender();
+
+		try {
+			const stream = await this.session.createSideQuestionStream(question);
+			for await (const event of stream) {
+				if (event.type === "done") {
+					component.updateContent(event.message, false);
+				} else if (event.type === "error") {
+					component.updateContent(event.error, false);
+				} else {
+					component.updateContent(event.partial, true);
+				}
+				this.ui.requestRender();
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(`Side question failed: ${message}`);
 		}
 	}
 
@@ -6401,7 +6482,8 @@ export class InteractiveMode {
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
-| \`${followUp}\` | Queue follow-up message |
+| \`${followUp}\` | Queue follow-up message (or type \`btw <message>\`) |
+| \`/btw <message>\` | Ask a side question answered immediately while the agent runs |
 | \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste image or text from clipboard |
 | \`/\` | Slash commands |

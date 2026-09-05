@@ -28,10 +28,13 @@ import type {
 import { contentText } from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
+	AssistantMessageEventStream,
 	AuthResult,
+	Context,
 	ImageContent,
 	Model,
 	ProviderHeaders,
+	SimpleStreamOptions,
 	TextContent,
 	Usage,
 } from "@earendil-works/pi-ai/compat";
@@ -97,6 +100,7 @@ import {
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -1415,6 +1419,47 @@ export class AgentSession {
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
 		await this._queueFollowUp(expandedText, images);
+	}
+
+	/**
+	 * Start a one-off side question against the current conversation, outside the
+	 * agent loop. Used for "/btw" while the agent is running: the answer streams
+	 * back immediately without interrupting the agent, and neither the question
+	 * nor the answer enters the session history or LLM context.
+	 *
+	 * The context is a snapshot of the current messages plus the question, with no
+	 * tools available and a system-prompt instruction to answer directly.
+	 * @throws Error if no model is selected or authentication fails
+	 */
+	async createSideQuestionStream(question: string): Promise<AssistantMessageEventStream> {
+		const model = this.model;
+		if (!model) {
+			throw new Error(formatNoModelSelectedMessage());
+		}
+
+		const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+
+		const context: Context = {
+			systemPrompt:
+				(this.agent.state.systemPrompt ?? "") +
+				"\n\nThe user is asking a quick side question while a task continues in the background. Answer the question directly and concisely, drawing on the conversation above. You have no tools available for this answer: do not call tools and do not attempt to continue or resume the background task.",
+			messages: [
+				...convertToLlm(this.agent.state.messages.slice()),
+				{ role: "user", content: [{ type: "text", text: question }], timestamp: Date.now() },
+			],
+		};
+
+		const options: SimpleStreamOptions = {
+			apiKey,
+			headers,
+			env,
+			sessionId: this.sessionId,
+		};
+		if (requestModel.reasoning && this.thinkingLevel && this.thinkingLevel !== "off") {
+			options.reasoning = this.thinkingLevel;
+		}
+
+		return this.agent.streamFunction(requestModel, context, options);
 	}
 
 	/**
