@@ -107,6 +107,13 @@ tmux send-keys -t pi-test Escape               # special keys (also C-o for ctrl
 tmux kill-session -t pi-test
 ```
 
+## Local Tools
+
+Personal tooling built around pi (helper scripts, schedulers, dashboards, etc.) lives in `local/` in this repo — never in `~/.local/bin`, dotfiles, or other machine-global locations. The only exceptions are tools installed by third parties (`pi` itself, `terminal-notifier`, etc.). When adding a tool:
+
+- Add it under `local/` and document it in `local/README.md`.
+- System-level installers (launchd plists, symlinks) may point into `local/`, but their sources stay here.
+
 ## Changelog
 
 Location: `packages/*/CHANGELOG.md` (one per package).
