@@ -15,7 +15,7 @@ import { refreshModelCatalogs } from "../model-catalog-refresh.ts";
 import { getModelSelectorSearchText } from "../model-search.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint } from "./keybinding-hints.ts";
+import { keyDisplayText, keyHint } from "./keybinding-hints.ts";
 
 interface ModelItem {
 	provider: string;
@@ -527,11 +527,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		const query = this.searchText();
 		let hint: string;
 		if (this.isProviderView()) {
-			hint = "Enter to browse models · Esc to cancel";
+			hint = `${keyDisplayText("tui.select.confirm")} to browse models · ${keyDisplayText("tui.select.cancel")} to cancel`;
 		} else if (query) {
-			hint = "Enter to select · Ctrl+S sets as default · Esc to clear";
+			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} sets as default · ${keyDisplayText("tui.select.cancel")} to clear`;
 		} else {
-			hint = "Enter to select · Ctrl+S sets as default · Esc or Backspace to pick another provider";
+			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} sets as default · ${keyDisplayText("tui.select.cancel")} or ${keyDisplayText("tui.editor.deleteCharBackward")} to pick another provider`;
 		}
 		this.hintText.setText(theme.fg("dim", `  ${hint}`));
 	}
@@ -621,9 +621,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			}
 			return;
 		}
-
-		// Ctrl+S — select and save as default
-		if (matchesKey(keyData, "ctrl+s") && this.onSelectAsDefaultCallback) {
+		// Select and save as default
+		if (kb.matches(keyData, "app.models.save") && this.onSelectAsDefaultCallback) {
 			if (!providerView) {
 				const selectedModel = this.filteredModels[this.modelSelectedIndex];
 				if (selectedModel) {
