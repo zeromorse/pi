@@ -1,6 +1,12 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import {
+	clampThinkingLevel,
+	type Message,
+	type Model,
+	type SimpleStreamOptions,
+	streamSimple,
+} from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -303,6 +309,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
+	// Extension hooks for provider payloads/responses. Attached to the Agent so the
+	// main loop invokes them, and used as streamFn defaults so standalone requests
+	// that bypass the agent loop (compaction and branch-summary summarization) still
+	// run `before_provider_request` / `after_provider_response` extension handlers.
+	const onPayload: SimpleStreamOptions["onPayload"] = async (payload, _model) => {
+		const runner = extensionRunnerRef.current;
+		if (!runner?.hasHandlers("before_provider_request")) {
+			return payload;
+		}
+		return runner.emitBeforeProviderRequest(payload);
+	};
+	const onResponse: SimpleStreamOptions["onResponse"] = async (response, _model) => {
+		const runner = extensionRunnerRef.current;
+		if (!runner?.hasHandlers("after_provider_response")) {
+			return;
+		}
+		await runner.emit({
+			type: "after_provider_response",
+			status: response.status,
+			headers: response.headers,
+		});
+	};
+
 	agent = new Agent({
 		initialState: {
 			systemPrompt: "",
@@ -327,6 +356,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				onPayload: options?.onPayload ?? onPayload,
+				onResponse: options?.onResponse ?? onResponse,
 				transformHeaders: async (requestHeaders) => {
 					const headers = mergeProviderAttributionHeaders(
 						model,
@@ -340,24 +371,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				},
 			});
 		},
-		onPayload: async (payload, _model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
-				return payload;
-			}
-			return runner.emitBeforeProviderRequest(payload);
-		},
-		onResponse: async (response, _model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("after_provider_response")) {
-				return;
-			}
-			await runner.emit({
-				type: "after_provider_response",
-				status: response.status,
-				headers: response.headers,
-			});
-		},
+		onPayload,
+		onResponse,
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;

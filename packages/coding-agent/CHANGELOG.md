@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed premature missing-model errors after login by waiting for catalog discovery. Radius now defaults to `balanced`, falling back to the first available Radius model when needed.
+- Fixed `before_provider_request` and `after_provider_response` extension hooks not running for standalone LLM requests that bypass the agent loop (compaction and branch-summary summarization). Providers that require payload rewriting (for example proxies that only accept Claude Code-shaped requests) now see these requests too.
 
 ### Added
 
