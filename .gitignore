@@ -41,6 +41,5 @@ todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
-.pi/extensions/mcli-compat.ts
 collect.sh
 packages/agent/docs/extensions/pi-server-artifact/index.md
