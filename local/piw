@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# piw — pi restart-loop wrapper(让 /restart 在 tmux 之外也能用)。
+#
+# pi 无法在前台自重启: 进程退出后父 shell 会回收终端,后台子进程无法干净地
+# 抢回前台(与 shell 作业控制竞争)。所以 ~/.pi/agent/extensions/restart.ts 的
+# /restart 命令在非 tmux 环境下写标记文件后正常退出,由本 wrapper 读标记并
+# 以相同会话重新拉起 pi。在 tmux 里则直接走 respawn-pane,不经过本 wrapper。
+#
+# 用法: piw [pi 参数...](首次参数原样传给 pi;重启参数来自 /restart)
+# 环境变量:
+#   PI_BIN            pi 可执行文件(默认 PATH 中的 pi)
+#   PI_RESTART_MARKER 标记文件路径(默认 ~/.pi/agent/restart-pending.<wrapper-pid>,带 PID 隔离多实例)
+set -u
+
+PI_BIN="${PI_BIN:-pi}"
+# marker 带 wrapper PID 隔离多实例,避免并发 /restart 互相覆盖;
+# 扩展通过同名环境变量读到相同路径
+marker="${PI_RESTART_MARKER:-$HOME/.pi/agent/restart-pending.$$}"
+export PI_RESTART_MARKER="$marker"
+export PI_RESTART_LOOP=1
+
+# 清掉上次异常残留的标记: 标记只在本次 wrapper 生命周期内有效
+rm -f "$marker"
+
+while true; do
+	"$PI_BIN" "$@"
+	rc=$?
+	if [[ ! -f "$marker" ]]; then
+		exit "$rc"
+	fi
+	# 标记文件每行一个重启参数
+	args=()
+	while IFS= read -r line; do
+		args+=("$line")
+	done < "$marker"
+	rm -f "$marker"
+	if [[ ${#args[@]} -eq 0 ]]; then
+		exit "$rc"
+	fi
+	# 清屏,避免上一轮 pi 退出的 "To resume this session" 提示残留
+	printf '\033[2J\033[H'
+	set -- "${args[@]}"
+done
