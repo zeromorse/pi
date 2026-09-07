@@ -23,16 +23,25 @@
  *      - 最后是 user 消息 / toolResult / 带 toolCall 的 assistant → 运行中
  *      - 最后是纯文本 assistant → 等待输入(已回复,等你)
  *   4. 每个进程沿 ppid 链识别所在终端(tty / tmux pane / 宿主 app 如 VS Code),
- *      并按"会话文件创建时间 <= 进程启动时间 + 5s 的最新文件"把进程与会话行配对
+ *      并把进程与会话行配对:
+ *      - 第 0 轮(精确): 扩展 pid-registry.ts 在每次 session_start 时写
+ *        <agentDir>/runtime/<pid>.json = {pid,file,ts},直接按 pid 配对;
+ *        注册缺失(扩展未装/老进程)回退启发式。死 pid 的注册文件顺手清理。
+ *      - 第 1 轮(新会话): |文件创建时间 - 进程启动| <= 5s 强绑定
+ *      - 第 2 轮(resume): 文件创建早于进程启动 + 5s,且进程启动后(容差 5s)
+ *        写入过(在续写);取 mtime 最新。已知局限: 进程 resume 后长期零写入
+ *        时 mtime 停留旧值,而死会话可能因重名(session_info)mtime 很新 → 错配,
+ *        这正是第 0 轮注册表要解决的。
  *   零依赖,只用 Node 内置模块。
  */
 
 import { execFileSync } from "node:child_process";
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 const SESSIONS_DIR = join(homedir(), ".pi/agent/sessions");
+const RUNTIME_DIR = join(homedir(), ".pi/agent/runtime");
 const TAIL_BYTES = 64 * 1024;
 const HEAD_BYTES = 32 * 1024;
 const STALE_RUNNING_SEC = 300; // 运行中但超过 5 分钟无写入 → 视为疑似卡死/已退出
@@ -220,6 +229,50 @@ function listSessionFiles(dir) {
 	}
 	out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 	return out;
+}
+
+// ---------- pid 注册表 ----------
+
+// 扩展 ~/.pi/agent/extensions/pid-registry.ts 在每次 session_start 时写
+// <agentDir>/runtime/<pid>.json = {pid,file,ts};进程正常退出时自删,
+// SIGKILL/崩溃残留由本函数按进程存活兜底清理。
+// 纯启发式(mtime/createMs)无法区分"resume 后零写入的活会话"与"被重命名 touch 的死会话",
+// 注册表提供进程侧的精确映射。
+function readPidRegistry(startMsByPid) {
+	// pid -> { file, ts }
+	const reg = new Map();
+	let names;
+	try {
+		names = readdirSync(RUNTIME_DIR);
+	} catch {
+		return reg;
+	}
+	for (const name of names) {
+		if (!/^\d+\.json$/.test(name)) continue;
+		const path = join(RUNTIME_DIR, name);
+		let data = null;
+		try {
+			data = JSON.parse(readFileSync(path, "utf8"));
+		} catch {}
+		const pid = typeof data?.pid === "number" ? String(data.pid) : null;
+		const startMs = pid ? startMsByPid.get(pid) : undefined;
+		// pid 不在存活 pi 进程表(进程已死或被非 pi 进程复用),
+		// 或注册时间早于该进程启动(pid 被新 pi 进程复用读到旧注册) → 陈旧,清理
+		if (
+			!pid ||
+			startMs === undefined ||
+			typeof data.file !== "string" ||
+			typeof data.ts !== "number" ||
+			data.ts < startMs - 5000
+		) {
+			try {
+				unlinkSync(path);
+			} catch {}
+			continue;
+		}
+		reg.set(pid, { file: data.file, ts: data.ts });
+	}
+	return reg;
 }
 
 // ---------- 会话文件解析 ----------
@@ -1191,6 +1244,8 @@ function buildDetailLines(row) {
 
 function collectActive() {
 	const procs = findPiProcesses();
+	// pid 注册表(读一次,死 pid 注册文件顺手清理)
+	const registry = readPidRegistry(new Map(procs.map((p) => [p.pid, p.startMs])));
 	const byCwd = new Map();
 	for (const p of procs) {
 		if (!p.cwd) continue;
@@ -1200,13 +1255,15 @@ function collectActive() {
 	const rows = [];
 	for (const [cwd, cwdProcs] of byCwd) {
 		const files = listSessionFiles(cwdToSessionDir(cwd));
-		// 进程 <-> 会话文件配对(纯启发式: pi 写完即关不持有句柄,也没有锁文件)。
+		// 进程 <-> 会话文件配对。第 0 轮是注册表精确配对;第 1/2/3 轮是启发式
+		// (pi 写完即关不持有句柄,也没有锁文件),覆盖注册缺失(扩展未装/老进程)的场景:
 		// 会话文件名时间戳 = 会话开始时刻 ≈ 进程启动时间,但文件落盘延迟到首条 assistant 回复。
 		// 第 1 轮(新会话): |文件创建时间 - 进程启动| <= 5s,进程启动时新建的会话,强绑定。
 		// 第 2 轮(resume): 文件创建早于进程启动 + 5s,且进程启动后(容差 5s)写入过(在续写);
 		//        候选取 mtime 最新(最近被写的最可能是该进程在续写的),平手取 createMs 最大。
-		//        已知局限: 进程 waiting 很久、同目录又有更晚死的进程时仍可能错配(元数据无法区分)。
-		// 两轮都跳过已占用文件,继续找次优。
+		//        已知局限: 进程 resume 后长期零写入时 mtime 停在旧值,会被排除;而死会话可能因
+		//        重名(session_info)mtime 很新反而胜出 → 错配。装了 pid-registry 扩展则由第 0 轮解决。
+		// 各轮都跳过已占用文件,继续找次优。
 		// 注意不能按 mtime 降序取第一个满足"createMs <= 启动+5s"的文件: 已退出进程留下的死文件
 		// mtime 常仍是目录最新,活进程会错配到死会话 → 死会话一直显示"存活"(带活进程的 pid,
 		// 按 x 停止还会误杀无辜进程),真正在跑的会话反而不显示(已踩坑)。
@@ -1219,7 +1276,32 @@ function collectActive() {
 			procByFile.set(f.path, p);
 			fileOfProc.set(p, f);
 		};
+		// 第 0 轮(注册表精确配对): 扩展 pid-registry 写的 pid→会话文件映射,
+		// 无条件优先于启发式。注册的文件可能不在本 cwd 的默认会话目录下
+		// (如 --session / 跨目录 fork),补进文件列表参与分析。
 		for (const p of procsDesc) {
+			const r = registry.get(p.pid);
+			if (!r) continue;
+			let f = files.find((x) => x.path === r.file);
+			if (!f) {
+				try {
+					const st = statSync(r.file);
+					f = {
+						path: r.file,
+						mtimeMs: st.mtimeMs,
+						createMs: sessionFileCreateMs(basename(r.file)) ?? st.mtimeMs,
+						parent: headerParentOf(r.file, st.mtimeMs),
+					};
+					files.push(f);
+				} catch {
+					continue; // 注册指向的文件已不存在
+				}
+			}
+			if (procByFile.has(f.path)) continue; // 同一会话文件被多进程 resume,先到先得
+			pair(f, p);
+		}
+		for (const p of procsDesc) {
+			if (fileOfProc.has(p)) continue; // 已被第 0/前一轮配对
 			for (const f of files) {
 				if (procByFile.has(f.path)) continue;
 				if (Math.abs(f.createMs - p.startMs) <= 5000) {
