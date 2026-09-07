@@ -29,8 +29,9 @@ type SessionMessage = {
 	content?: unknown;
 };
 
-/** Preferred small/fast models for naming (first available wins). */
+/** Preferred small/fast models for naming (first configured one wins). */
 const PREFERRED_MODELS: Array<{ provider: string; modelId: string }> = [
+	{ provider: "mcli", modelId: "glm-5.3-flash" },
 	{ provider: "google", modelId: "gemini-2.5-flash" },
 	{ provider: "google", modelId: "gemini-2.0-flash" },
 ];
@@ -40,6 +41,33 @@ const MAX_CONVERSATION_CHARS = 6000;
 
 /** Max characters of the generated name. */
 const MAX_NAME_CHARS = 40;
+
+/**
+ * The mcli gateway (internal Claude-compatible proxy) drops requests whose
+ * system prompt does not start with the official Claude Code marker. Direct
+ * complete() calls bypass the before_provider_request extension hook used by
+ * the mcli-compat extension, so inject the marker here for mcli requests.
+ */
+const MCLI_SYSTEM_MARKER = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/** Prepend the mcli system marker to a provider request payload. */
+function withMcliSystemMarker(payload: unknown): unknown {
+	if (!payload || typeof payload !== "object") return payload;
+	const system = (payload as { system?: unknown }).system;
+	const marker = { type: "text", text: MCLI_SYSTEM_MARKER };
+	if (Array.isArray(system)) {
+		const alreadyPresent = system.some(
+			(part) =>
+				typeof part === "object" && part !== null && (part as { text?: unknown }).text === MCLI_SYSTEM_MARKER,
+		);
+		if (alreadyPresent) return payload;
+		return { ...payload, system: [marker, ...system] };
+	}
+	if (typeof system === "string" && system.length > 0) {
+		return { ...payload, system: [marker, { type: "text", text: system }] };
+	}
+	return { ...payload, system: [marker] };
+}
 
 const NAME_PROMPT = `You generate short session titles for a coding agent conversation.
 
@@ -102,11 +130,11 @@ export default function (pi: ExtensionAPI) {
 			.map((e) => e.message as SessionMessage);
 	}
 
-	/** Pick a naming model: preferred small model, else the active model. */
+	/** Pick a naming model: preferred small model with configured auth, else the active model. */
 	function pickModel(ctx: Parameters<Parameters<typeof pi.on>[1]>[1]) {
 		for (const pref of PREFERRED_MODELS) {
 			const model = ctx.modelRegistry.find(pref.provider, pref.modelId);
-			if (model) return model;
+			if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
 		}
 		return ctx.model;
 	}
@@ -135,8 +163,15 @@ export default function (pi: ExtensionAPI) {
 				maxTokens: 200,
 				cacheRetention: "none",
 				sessionId: uuidv7(),
+				onPayload: model.provider === "mcli" ? withMcliSystemMarker : undefined,
 			},
 		);
+
+		// complete() resolves failed calls as an AssistantMessage with an error
+		// stopReason instead of throwing, so surface the real error here.
+		if (response.stopReason === "error" || response.stopReason === "aborted") {
+			throw new Error(response.errorMessage ?? `命名模型调用失败 (${response.provider}/${response.model})`);
+		}
 
 		const name = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
