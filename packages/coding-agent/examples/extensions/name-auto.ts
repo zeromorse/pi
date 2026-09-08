@@ -75,7 +75,8 @@ Rules:
 - Reply with ONE title only. No quotes, no punctuation at the end, no explanation.
 - Max ~20 characters (Chinese) or ~6 words (English).
 - Describe the core task or topic (e.g. "起送价接口校验分析", "Fix login race condition").
-- Use the same language as the conversation.
+- Prefer Chinese titles (中文). Fall back to the conversation's language only
+  when a Chinese title would be clearly unsuitable.
 - If the conversation is trivial or unclear, reply with a 2-6 word generic topic.`;
 
 function extractText(content: unknown): string {
