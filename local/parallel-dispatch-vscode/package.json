@@ -1,0 +1,34 @@
+{
+	"name": "parallel-dispatch",
+	"displayName": "Parallel Dispatch",
+	"description": "Launch pi parallel-dispatch child sessions in terminal tabs. Reads .pi/dispatch.json in the workspace root.",
+	"version": "0.1.0",
+	"publisher": "duanyanlong",
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onCommand:parallel-dispatch.launch",
+		"onUri:duanyanlong.parallel-dispatch"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "parallel-dispatch.launch",
+				"title": "Parallel Dispatch: Launch"
+			}
+		]
+	},
+	"scripts": {
+		"compile": "tsc -p ./",
+		"package": "vsce package"
+	},
+	"devDependencies": {
+		"@types/vscode": "1.136.0",
+		"typescript": "5.9.3"
+	}
+}
