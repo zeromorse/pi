@@ -4,17 +4,18 @@
  * 显示每个进程的当前状态(运行中 / 等待输入 / 最后回复摘要)。
  *
  * 用法:
- *   node pi-dashboard.mjs           单次输出
+ *   node pi-dashboard.mjs           单次输出(末尾附带定时任务摘要)
  *   node pi-dashboard.mjs -w        watch 模式,每 2s 刷新;会话完成/出错/卡死时发 macOS 通知
  *                                 (安装 terminal-notifier 后点击通知可跳回 dashboard 所在终端:
  *                                  激活宿主 app;tmux 内精确切回 dashboard 的 window/pane)
  *
- * watch 按键: ↑↓/jk 选择 · Enter/e 详情 · t 跳转终端 · x 停止会话进程(二次确认) · q 退出
+ * watch 按键: ↑↓/jk 选择 · Enter/e 详情 · t 跳转终端 · x 停止会话进程(二次确认) · c 定时任务 · q 退出
  *   node pi-dashboard.mjs -w -n 5   watch 模式,每 5s 刷新
  *   node pi-dashboard.mjs --all     不依赖进程,列出最近 24h 内有活动的所有会话
  *   node pi-dashboard.mjs --all --hours 72
  *   node pi-dashboard.mjs --no-notify  关闭 watch 模式的系统通知
  *   node pi-dashboard.mjs --demo     渲染一段样例 markdown,预览详情视图高亮配色
+ *   node pi-dashboard.mjs --cron    只看定时任务视图(pi 相关的 launchd/cron)
  *
  * 原理:
  *   1. ps + lsof 找到所有 pi 进程及其工作目录
@@ -42,10 +43,32 @@ import { basename, join } from "node:path";
 
 const SESSIONS_DIR = join(homedir(), ".pi/agent/sessions");
 const RUNTIME_DIR = join(homedir(), ".pi/agent/runtime");
+const LAUNCHAGENTS_DIR = join(homedir(), "Library/LaunchAgents");
 const TAIL_BYTES = 64 * 1024;
 const HEAD_BYTES = 32 * 1024;
 const STALE_RUNNING_SEC = 300; // 运行中但超过 5 分钟无写入 → 视为疑似卡死/已退出
 const LONG_WAIT_SEC = 600; // 等待输入超过 10 分钟 → 红色高亮
+
+// ---------- 定时任务(pi 相关的 launchd / cron) ----------
+
+// 独立的 pi 词(前后非字母数字下划线),不会误匹配 pilot/pin 等
+const PI_WORD_RE = /(^|[^A-Za-z0-9_])pi([^A-Za-z0-9_]|$)/;
+// 日志行首时间戳: 2026-09-07 10:00:03 或 [2026-09-07 16:10:22]
+const LOG_TS_RE = /^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\]?/;
+const DOW_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+// 命令含 match 子串的 cron 任务显式指定证据日志(命令行无重定向/需按 agent 过滤时);
+// filter = 只保留含该子串的日志行(共享 cron.log 区分各 agent);尾部 exit=N / ERROR 行据此判定上次运行结果
+const FRONTIER_CRON_LOG = "~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log";
+const CRON_EVIDENCE = [
+	{ match: "cron_ccmp_cost.sh", logs: ["~/.ccmp/logs/cron.log"] },
+	{ match: "run_agent.sh doctor", logs: [FRONTIER_CRON_LOG], filter: "agent=doctor" },
+	{ match: "run_agent.sh engineer", logs: [FRONTIER_CRON_LOG], filter: "agent=engineer" },
+	{ match: "run_agent.sh scout", logs: [FRONTIER_CRON_LOG], filter: "agent=scout" },
+	{ match: "run_agent.sh curator", logs: [FRONTIER_CRON_LOG], filter: "agent=curator" },
+	{ match: "run_agent.sh critic", logs: [FRONTIER_CRON_LOG], filter: "agent=critic" },
+	{ match: "run_agent.sh planner", logs: [FRONTIER_CRON_LOG], filter: "agent=planner" },
+];
+const CRON_CACHE_SEC = 60; // crontab/plutil/launchctl 是外部命令,不值得每 2s 刷
 
 // ---------- 进程发现 ----------
 
@@ -495,6 +518,302 @@ function analyzeSession(path) {
 	};
 }
 
+// ---------- 定时任务收集 ----------
+
+// plist → JSON(plutil 为 macOS 自带);失败返回 null(stderr 静默,损坏 plist 不刷屏)
+function parsePlist(path) {
+	try {
+		return JSON.parse(
+			execFileSync("plutil", ["-convert", "json", "-o", "-", path], {
+				encoding: "utf8",
+				maxBuffer: 1024 * 1024,
+				stdio: ["ignore", "pipe", "ignore"],
+			}),
+		);
+	} catch {
+		return null;
+	}
+}
+
+function fileHeadText(path, bytes = 16 * 1024) {
+	// 只读文本脚本头部;二进制/不存在返回 null
+	if (!/\.(z?sh|bash)$/.test(path)) return null;
+	try {
+		return readSlice(path, 0, bytes);
+	} catch {
+		return null;
+	}
+}
+
+// 命令行里的绝对路径 .sh 脚本 token(去掉引号)
+function scriptTokens(cmd) {
+	const out = [];
+	for (const m of cmd.matchAll(/["']?([^\s;&|'"]+\.sh)\b/g)) {
+		if (m[1].startsWith("/")) out.push(m[1]);
+	}
+	return out;
+}
+
+// launchctl list 全表 → label -> {pid, status}(status 为上次退出码,"-" 表示未记录)
+function launchctlList() {
+	const m = new Map();
+	try {
+		const out = execFileSync("launchctl", ["list"], {
+			encoding: "utf8",
+			maxBuffer: 4 * 1024 * 1024,
+		});
+		for (const line of out.split("\n").slice(1)) {
+			const c = line.split("\t");
+			if (c.length >= 3) m.set(c[2].trim(), { pid: c[0].trim(), status: c[1].trim() });
+		}
+	} catch {}
+	return m;
+}
+
+// cron 5 字段 → 中文调度描述
+function cronScheduleText(min, hour, dom, mon, dow) {
+	if (min.startsWith("@")) return min; // @reboot / @daily 等
+	const time = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+	if (dom === "*" && mon === "*") {
+		if (dow === "*") return `每天 ${time}`;
+		const days = dow
+			.split(",")
+			.map((d) => DOW_CN[+d % 7] ?? d)
+			.join("");
+		return `${days} ${time}`;
+	}
+	return `${min} ${hour} ${dom} ${mon} ${dow}`;
+}
+
+// cron 任务的证据日志: 显式配置优先(可带 filter 行过滤),否则解析命令里的 >> / > 重定向
+// (相对路径按 cd 目录展开;2>&1 / /dev/null 忽略)
+function evidenceLogsOfCron(cmd) {
+	for (const ev of CRON_EVIDENCE) {
+		if (cmd.includes(ev.match)) {
+			return {
+				logs: ev.logs.map((p) => p.replace(/^~(?=\/)/, homedir())),
+				filter: ev.filter ?? null,
+			};
+		}
+	}
+	const logs = [];
+	const cd = cmd.match(/(?:^|[;&]|&&|\s)cd\s+(\S+)/);
+	const base = cd ? cd[1].replace(/[;)]$/, "") : null;
+	const seen = new Set();
+	for (const m of cmd.matchAll(/>>?\s*([^\s;&|)]+)/g)) {
+		let p = m[1].replace(/^["']|["']$/g, "");
+		if (!p || p === "&1" || p === "&2" || p === "/dev/null") continue;
+		if (!p.startsWith("/")) {
+			if (!base) continue;
+			p = p.startsWith("./") ? join(base, p.slice(2)) : join(base, p);
+		}
+		if (!seen.has(p)) {
+			seen.add(p);
+			logs.push(p);
+		}
+	}
+	return { logs, filter: null };
+}
+
+// 日志尾部 16KB: 最后一条时间戳行之后视为"最近一次运行"窗口,
+// 窗口内 ERROR / exit=N>0 / FAILED 判定失败;无时间戳行时退回尾部 30 行;
+// filter 非空时只保留含该子串的行(共享 cron.log 区分各 agent),过滤后无匹配则 empty
+function analyzeJobLog(path, filter = null) {
+	let st;
+	try {
+		st = statSync(path);
+	} catch {
+		return null;
+	}
+	const WIN = 16 * 1024;
+	const text = readSlice(path, Math.max(0, st.size - WIN), WIN);
+	let lines = text.split("\n");
+	if (st.size > WIN && lines.length > 0) lines.shift(); // 丢弃不完整首行
+	if (filter) lines = lines.filter((l) => l.includes(filter));
+	if (lines.filter((l) => l.trim()).length === 0) {
+		return { mtimeMs: st.mtimeMs, lastRunMs: null, failed: false, window: [], tail: [], empty: true };
+	}
+	let tsIdx = -1;
+	let lastRunMs = null;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const m = LOG_TS_RE.exec(lines[i]);
+		if (m) {
+			tsIdx = i;
+			lastRunMs = Date.parse(`${m[1]}T${m[2]}`);
+			break;
+		}
+	}
+	const window = tsIdx >= 0 ? lines.slice(tsIdx) : lines.slice(-30);
+	const failed = window.some((l) => /ERROR|FAILED|exit=[1-9]\d*/.test(l));
+	return {
+		mtimeMs: st.mtimeMs,
+		lastRunMs: Number.isFinite(lastRunMs) ? lastRunMs : st.mtimeMs,
+		failed,
+		window,
+		tail: lines.slice(-200),
+		empty: false,
+	};
+}
+
+// cron 任务名: 上方注释冒号/逗号前的一段,否则主脚本名 + 首参数
+function cronJobName(cmd, desc) {
+	if (desc) {
+		const head = desc.split(/[:：，,]/)[0].trim();
+		if (head) return head;
+	}
+	const shMatch = cmd.match(/([^\s\/]+\.(?:z?sh|bash))\s+([^-\s]\S*)?/);
+	if (shMatch) {
+		const arg = shMatch[2] && !shMatch[2].startsWith("-") ? ` ${shMatch[2]}` : "";
+		return `${shMatch[1]}${arg}`;
+	}
+	return truncate(cmd.split(/\s+/)[0], 24);
+}
+
+let schedCache = null; // { ts, jobs }
+
+// 发现 pi 相关定时任务(launchd LaunchAgents + crontab):
+// 判定规则 = 命令行含独立 pi 词,或引用的 .sh 脚本内容调 pi
+// (ccmp/frontier-radar 都是脚本内间接调 pi 的形态)。结果 60s 缓存。
+function collectScheduledJobs() {
+	const now = Date.now();
+	if (schedCache && now - schedCache.ts < CRON_CACHE_SEC * 1000) return schedCache.jobs;
+	const jobs = [];
+	// ---- launchd ----
+	let plists = [];
+	try {
+		plists = readdirSync(LAUNCHAGENTS_DIR).filter((f) => f.endsWith(".plist"));
+	} catch {}
+	const lc = launchctlList();
+	for (const f of plists) {
+		const pl = parsePlist(join(LAUNCHAGENTS_DIR, f));
+		if (!pl) continue;
+		const label = typeof pl.Label === "string" ? pl.Label : f.replace(/\.plist$/, "");
+		const args = Array.isArray(pl.ProgramArguments) ? pl.ProgramArguments.map(String) : [];
+		const program = String(pl.Program ?? args[0] ?? "");
+		const cmdText = args.join(" ") || program;
+		// pi 相关判定: Label 含独立 pi 词(如 com.zeromorse.pi-sync)、
+		// args[0] 恰为 pi 二进制(直接调 pi),或命令行中任一 .sh 脚本(含 zsh xxx.sh 包装形态,
+		// program 本体是 /bin/zsh)内容调 pi。
+		// 不看 program 路径本身: pi 仓库里的其他工具(如 caffeinebar)路径都含 /agent/pi/,会误匹配
+		let related = PI_WORD_RE.test(label);
+		if (!related && basename(program) === "pi") related = true;
+		if (!related) {
+			for (const s of scriptTokens(cmdText)) {
+				const head = fileHeadText(s);
+				if (head && PI_WORD_RE.test(head)) {
+					related = true;
+					break;
+				}
+			}
+		}
+		if (!related) continue;
+		const sci = Array.isArray(pl.StartCalendarInterval) ? pl.StartCalendarInterval[0] : pl.StartCalendarInterval;
+		let schedule = "-";
+		if (sci && typeof sci.Hour === "number") {
+			const hm = `${String(sci.Hour).padStart(2, "0")}:${String(sci.Minute ?? 0).padStart(2, "0")}`;
+			schedule = sci.Weekday === undefined ? `每天 ${hm}` : `${DOW_CN[sci.Weekday % 7]} ${hm}`;
+		} else if (typeof pl.StartInterval === "number") {
+			const s = pl.StartInterval;
+			schedule = s % 3600 === 0 ? `每 ${s / 3600} 小时` : s % 60 === 0 ? `每 ${s / 60} 分钟` : `每 ${s} 秒`;
+		}
+		const st = lc.get(label) ?? {};
+		const running = st.pid !== undefined && st.pid !== "" && st.pid !== "-";
+		const exit = st.status !== undefined && /^-?\d+$/.test(st.status) ? parseInt(st.status, 10) : null;
+		// 证据日志: 先查 CRON_EVIDENCE(命令子串匹配,适用于迁到 launchd 的原 cron 任务,
+		// cron.log 仍由脚本自己写,结构化记录比 stdout 重定向精确);
+		// 否则用 plist 的 StandardOutPath
+		const ev = evidenceLogsOfCron(cmdText);
+		const logPath = ev.logs.length > 0 ? ev.logs[0] : typeof pl.StandardOutPath === "string" ? pl.StandardOutPath : null;
+		const log = logPath ? analyzeJobLog(logPath, ev.filter) : null;
+		const logs = ev.logs.length > 0 ? ev.logs : logPath ? [logPath] : [];
+		// 状态优先级: 运行中 > 上次退出码;退出码未记录时看日志窗口。
+		// 注意 launchd 的 exit 0 也可能表示"从未运行过"(默认值):
+		// exit 0 且证据日志无任何记录 → unknown,避免周任务迁移后未到调度日被误报 ok
+		let status = "unknown";
+		if (running) status = "running";
+		else if (exit !== null) status = exit === 0 ? (log?.empty ? "unknown" : "ok") : "failed";
+		else if (log) status = log.failed ? "failed" : log.empty ? "unknown" : "ok";
+		jobs.push({
+			id: `launchd:${label}`,
+			source: "launchd",
+			label,
+			name: label.split(".").pop() ?? label,
+			desc: typeof pl.Comment === "string" ? pl.Comment : null,
+			schedule,
+			cmd: cmdText,
+			exitCode: exit,
+			running,
+			logs,
+			log,
+			lastRunMs: log?.lastRunMs ?? null,
+			status,
+		});
+	}
+	// ---- cron ----
+	let crontab = null;
+	try {
+		crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", maxBuffer: 1024 * 1024 });
+	} catch {}
+	if (crontab) {
+		const commentBuf = [];
+		let cronIdx = 0;
+		for (const raw of crontab.split("\n")) {
+			const line = raw.trim();
+			if (!line) {
+				commentBuf.length = 0;
+				continue;
+			}
+			if (line.startsWith("#")) {
+				commentBuf.push(line.replace(/^#+\s*/, ""));
+				continue;
+			}
+			const m = line.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+			if (!m) {
+				commentBuf.length = 0;
+				continue;
+			}
+			cronIdx++;
+			const cmd = m[6];
+			let related = PI_WORD_RE.test(cmd);
+			if (!related) {
+				for (const s of scriptTokens(cmd)) {
+					const head = fileHeadText(s);
+					if (head && PI_WORD_RE.test(head)) {
+						related = true;
+						break;
+					}
+				}
+			}
+			if (related) {
+				const ev = evidenceLogsOfCron(cmd);
+				const log = ev.logs.length > 0 ? analyzeJobLog(ev.logs[0], ev.filter) : null;
+			jobs.push({
+					id: `cron:${cronIdx}`,
+					source: "cron",
+					label: null,
+					name: cronJobName(cmd, commentBuf.join(" ")),
+					desc: commentBuf.join(" ") || null,
+					schedule: cronScheduleText(m[1], m[2], m[3], m[4], m[5]),
+					cmd,
+					exitCode: null,
+					running: false,
+					logs: ev.logs,
+					log,
+					lastRunMs: log?.lastRunMs ?? null,
+					status: log ? (log.failed ? "failed" : log.empty ? "unknown" : "ok") : "unknown",
+				});
+			}
+			commentBuf.length = 0;
+		}
+	}
+	const order = { running: 0, failed: 1, unknown: 2, ok: 3 };
+	jobs.sort(
+		(a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || (b.lastRunMs ?? 0) - (a.lastRunMs ?? 0),
+	);
+	schedCache = { ts: now, jobs };
+	return jobs;
+}
+
 // ---------- 渲染 ----------
 
 const ANSI = {
@@ -867,7 +1186,7 @@ function buildLines(rows, meta, selectedFile, notice) {
 	);
 		if (notice) lines.push(`${ANSI.dim}  ${notice}${ANSI.reset}`);
 	lines.push(
-		`${ANSI.dim}↑↓/jk 选择 · Enter/e 展开 · t 跳转终端 · x 停止 · q/Ctrl+C 退出${ANSI.reset}`,
+		`${ANSI.dim}↑↓/jk 选择 · Enter/e 展开 · t 跳转终端 · x 停止 · c 定时任务 · q/Ctrl+C 退出${ANSI.reset}`,
 	);
 	return lines;
 }
@@ -1240,6 +1559,218 @@ function buildDetailLines(row) {
 	return { lines, bodyCount: body.length };
 }
 
+// ---------- 定时任务渲染 ----------
+
+function fmtDateTime(ms) {
+	if (ms === null || ms === undefined) return "-";
+	const d = new Date(ms);
+	const now = new Date();
+	const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+	if (d.toDateString() === now.toDateString()) return `今天 ${hm}`;
+	if (d.getFullYear() === now.getFullYear())
+		return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function jobStatusLabel(job) {
+	switch (job.status) {
+		case "running":
+			return "RUNNING";
+		case "failed":
+			return "FAILED";
+		case "ok":
+			return "OK";
+		default:
+			return "UNKNOWN";
+	}
+}
+
+function jobStatusColor(job) {
+	switch (job.status) {
+		case "running":
+			return ANSI.cyan;
+		case "failed":
+			return ANSI.red;
+		case "ok":
+			return ANSI.dim;
+		default:
+			return ANSI.yellow;
+	}
+}
+
+// NOTE 列: 失败时展示错误首行,其余展示简短说明
+function jobNote(job) {
+	if (job.status === "failed") {
+		const line = (job.log?.window ?? []).find((l) => /ERROR|FAILED|exit=[1-9]/.test(l));
+		if (line) return truncate(firstLine(line), 60);
+		return job.exitCode !== null ? `exit ${job.exitCode}` : "-";
+	}
+	if (job.status === "running") return "运行中…";
+	if (job.status === "unknown")
+		return job.log?.empty ? "日志无该任务记录" : job.logs.length > 0 ? "无日志" : "无日志(未配置重定向)";
+	return "ok";
+}
+
+function buildCronLines(jobs, selectedId, notice, pendingTrigger) {
+	const cols = process.stdout.columns || 120;
+	const lines = [];
+	lines.push(
+		`${ANSI.bold}pi dashboard${ANSI.reset}${ANSI.dim} — 定时任务  ${new Date().toLocaleTimeString()}  (c/Esc 返回列表)${ANSI.reset}`,
+	);
+	if (jobs.length === 0) {
+		lines.push(`${ANSI.dim}(未发现 pi 相关定时任务: ~/Library/LaunchAgents 与 crontab)${ANSI.reset}`);
+		lines.push(`${ANSI.dim}q 退出${ANSI.reset}`);
+		return lines;
+	}
+	const W_STAT = 8;
+	const W_JOB = 22;
+	const W_SCH = 13;
+	const W_RUN = 13;
+	const W_SRC = 8;
+	const W_NOTE = Math.max(20, cols - 2 - 2 - W_JOB - W_SCH - W_RUN - W_STAT - W_SRC - 5);
+	const head =
+		"  " +
+		pad("JOB", W_JOB) +
+		" " +
+		pad("SCHEDULE", W_SCH) +
+		" " +
+		pad("LAST RUN", W_RUN) +
+		" " +
+		pad("STATUS", W_STAT) +
+		" " +
+		pad("SOURCE", W_SRC) +
+		" " +
+		pad("NOTE", W_NOTE);
+	lines.push(`${ANSI.dim}${head}${ANSI.reset}`);
+	lines.push(ANSI.dim + "  " + "-".repeat(dispWidth(head) - 2) + ANSI.reset);
+	for (const job of jobs) {
+		const sel = selectedId !== null && selectedId !== undefined && job.id === selectedId;
+		const marker = sel ? `${ANSI.bold}> ${ANSI.reset}` : "  ";
+		const stat = jobStatusLabel(job);
+		const color = jobStatusColor(job);
+		lines.push(
+			marker +
+				(sel ? ANSI.bold : "") +
+				pad(truncate(job.name, W_JOB), W_JOB) +
+				(sel ? ANSI.reset : "") +
+				" " +
+				pad(job.schedule, W_SCH) +
+				" " +
+				pad(fmtDateTime(job.lastRunMs), W_RUN) +
+				" " +
+				color +
+				pad(stat, W_STAT) +
+				ANSI.reset +
+				" " +
+				ANSI.dim +
+				pad(job.source, W_SRC) +
+				ANSI.reset +
+				" " +
+				color +
+				pad(truncate(jobNote(job), W_NOTE), W_NOTE) +
+				ANSI.reset,
+		);
+	}
+	const counts = { running: 0, failed: 0, unknown: 0, ok: 0 };
+	for (const j of jobs) counts[j.status]++;
+	lines.push("");
+	lines.push(
+		`${ANSI.dim}${jobs.length} 个任务:${ANSI.reset}` +
+			(counts.running ? `${ANSI.cyan} ${counts.running} running${ANSI.reset}` : "") +
+			(counts.failed ? `${ANSI.red} ${counts.failed} failed${ANSI.reset}` : "") +
+			(counts.unknown ? `${ANSI.yellow} ${counts.unknown} unknown${ANSI.reset}` : "") +
+			`${ANSI.dim} ${counts.ok} ok${ANSI.reset}`,
+	);
+	if (pendingTrigger) {
+		const job = jobs.find((j) => j.id === pendingTrigger.id);
+		if (job) {
+			lines.push(
+				`${ANSI.yellow}  立即执行 ${job.name}? 再按 r 确认 (10s 内)${ANSI.reset}`,
+			);
+		}
+	}
+	if (notice) lines.push(`${ANSI.dim}  ${notice}${ANSI.reset}`);
+	lines.push(
+		`${ANSI.dim}↑↓/jk 选择 · Enter/e 日志 · r 立即执行(launchd) · c/Esc 返回 · q/Ctrl+C 退出${ANSI.reset}`,
+	);
+	return lines;
+}
+
+// 定时任务详情: 信息区 + 日志尾部(可滚动);返回 { lines, bodyCount }
+function buildCronDetailLines(job) {
+	const cols = process.stdout.columns || 120;
+	const lines = [];
+	lines.push(
+		`${ANSI.bold}pi dashboard${ANSI.reset}${ANSI.dim} — cron job detail (Esc/q 返回)${ANSI.reset}`,
+	);
+	const exitText =
+		job.exitCode === null ? "-" : job.exitCode === 0 ? "0 (成功)" : `${job.exitCode} (失败)`;
+	const info = [
+		["状态", `${jobStatusLabel(job)}${job.running ? " (正在运行)" : ""}`],
+		["任务", job.name],
+		["调度", job.schedule],
+		["来源", job.source === "launchd" ? `launchd ${job.label}` : "crontab"],
+		["退出码", exitText],
+		["上次运行", fmtDateTime(job.lastRunMs)],
+		["描述", job.desc ?? "-"],
+		["命令", job.cmd],
+		["日志", job.logs.length > 0 ? job.logs.map((l) => l.replace(homedir(), "~")).join("\n     ") : "无"],
+	];
+	for (const [k, v] of info) {
+		lines.push(`${ANSI.dim}${pad(k, 4)}${ANSI.reset} ${truncate(String(v), cols - 8)}`);
+	}
+	lines.push(ANSI.dim + "─".repeat(Math.max(20, cols - 1)) + ANSI.reset);
+	const body = [];
+	if (job.log) {
+		body.push(`${ANSI.bold}── 日志尾部 ──${ANSI.reset}`);
+		for (const raw of job.log.tail) {
+			const l = raw.replace(/\t/g, "   ").trimEnd();
+			if (!l) continue;
+			const isErr = /ERROR|FAILED|exit=[1-9]/.test(l);
+			body.push(isErr ? `${ANSI.red}  ${truncate(l, cols - 4)}${ANSI.reset}` : `  ${truncate(l, cols - 4)}`);
+		}
+	} else {
+		body.push(`${ANSI.dim}  (无日志)${ANSI.reset}`);
+	}
+	lines.push(...body);
+	return { lines, bodyCount: body.length };
+}
+
+// 手动触发: 仅 launchd(kickstart 干净且由 launchd 托管);cron 任务给出手动命令
+function triggerJob(job) {
+	if (job.source === "launchd") {
+		try {
+			execFileSync("launchctl", ["kickstart", `gui/${process.getuid()}`, job.label]);
+			return `已触发 ${job.label} (launchctl kickstart,后台运行)`;
+		} catch {
+			return `触发失败: launchctl kickstart gui/$(id -u)/${job.label}`;
+		}
+	}
+	return `cron 任务请手动执行: ${truncate(job.cmd, 100)}`;
+}
+
+// 单次模式末尾的定时任务摘要区块
+function cronSummaryLines() {
+	const jobs = collectScheduledJobs();
+	if (jobs.length === 0) return [];
+	const counts = { running: 0, failed: 0, unknown: 0, ok: 0 };
+	for (const j of jobs) counts[j.status]++;
+	const lines = [
+		"",
+		`${ANSI.bold}定时任务${ANSI.reset}${ANSI.dim}  ${jobs.length} 个: ${counts.failed} failed / ${counts.unknown} unknown / ${counts.ok} ok${ANSI.reset}`,
+	];
+	for (const j of jobs) {
+		const color = jobStatusColor(j);
+		const label =
+			j.status === "running" ? "RUN" : j.status === "failed" ? "FAIL" : j.status === "ok" ? "ok" : "?";
+		lines.push(
+			`  ${color}${pad(label, 4)}${ANSI.reset} ${pad(truncate(j.name, 26), 26)} ${ANSI.dim}${pad(j.schedule, 13)} 上次 ${fmtDateTime(j.lastRunMs)}  ${truncate(jobNote(j), 40)}${ANSI.reset}`,
+		);
+	}
+	lines.push(`${ANSI.dim}  详情: node local/pi-dashboard.mjs -w 后按 c,或 --cron${ANSI.reset}`);
+	return lines;
+}
+
 // ---------- 主流程 ----------
 
 function collectActive() {
@@ -1484,13 +2015,21 @@ if (args.includes("--demo")) {
 	process.exit(0);
 }
 
+if (args.includes("--cron")) {
+	// 只看定时任务视图
+	process.stdout.write(buildCronLines(collectScheduledJobs(), null, null, null).join("\n") + "\n");
+	process.exit(0);
+}
+
 if (!watch) {
-	process.stdout.write(tick().join("\n") + "\n");
+	const lines = tick();
+	lines.push(...cronSummaryLines()); // 末尾追加定时任务摘要
+	process.stdout.write(lines.join("\n") + "\n");
 } else {
 	// 隐藏光标,首次清屏一次;后续增量重绘不再清屏,避免闪烁
 	process.stdout.write("\x1b[?25l\x1b[H\x1b[2J");
 	const state = {
-		mode: "list", // list | detail
+		mode: "list", // list | detail | cron | cronDetail
 		rows: [],
 		meta: { desc: "", procs: 0, cwds: 0 },
 		selected: 0,
@@ -1500,6 +2039,10 @@ if (!watch) {
 		notice: null, // { text, ts } 跳转等操作的结果提示
 		prevStatus: new Map(), // file -> status,状态转变检测基线
 		pendingKill: null, // { file, ts } x 键二次确认状态
+		cronJobs: [],
+		cronSelected: 0,
+		cronSelectedId: null,
+		pendingTrigger: null, // { id, ts } r 键二次确认状态
 	};
 	let prevCount = 0;
 	const cleanup = () => {
@@ -1519,6 +2062,29 @@ if (!watch) {
 
 	const buildFrame = () => {
 		const notice = state.notice ? state.notice.text : null;
+		if (state.mode === "cron") {
+			return buildCronLines(state.cronJobs, state.cronSelectedId, notice, state.pendingTrigger);
+		}
+		if (state.mode === "cronDetail") {
+			const job = state.cronJobs[state.cronSelected];
+			if (job) {
+				const { lines, bodyCount } = buildCronDetailLines(job);
+				const window = (process.stdout.rows || 40) - 2; // 标题 1 行 + 底部提示 1 行
+				const visibleBody = Math.max(1, window - (lines.length - bodyCount));
+				state.maxScroll = Math.max(0, bodyCount - visibleBody);
+				state.scroll = Math.max(0, Math.min(state.scroll, state.maxScroll));
+				const head = lines.slice(0, lines.length - bodyCount);
+				const body = lines.slice(lines.length - bodyCount);
+				const foot = [];
+				if (notice) foot.push(`${ANSI.dim}  ${notice}${ANSI.reset}`);
+				foot.push(
+					`${ANSI.dim}↑↓/jk 滚动 · PgUp/PgDn 翻页 · g/G 首/尾 · r 立即执行 · Esc/q 返回 · Ctrl+C 退出${ANSI.reset}`,
+				);
+				return [...head, ...body.slice(state.scroll, state.scroll + visibleBody), ...foot];
+			}
+			state.mode = "cron"; // 选中任务被刷掉(如缓存重建),退回列表
+			return buildCronLines(state.cronJobs, state.cronSelectedId, notice, state.pendingTrigger);
+		}
 		if (state.mode === "detail") {
 			const row = state.rows[state.selected];
 			if (row) {
@@ -1585,13 +2151,38 @@ if (!watch) {
 		syncSelection();
 	};
 
+	const syncCronSelection = () => {
+		if (state.cronJobs.length === 0) {
+			state.cronSelected = 0;
+			state.cronSelectedId = null;
+			return;
+		}
+		state.cronSelected = Math.max(0, Math.min(state.cronSelected, state.cronJobs.length - 1));
+		state.cronSelectedId = state.cronJobs[state.cronSelected]?.id ?? null;
+	};
+
+	const restoreCronSelection = () => {
+		if (state.cronJobs.length === 0) {
+			state.cronSelected = 0;
+			state.cronSelectedId = null;
+			return;
+		}
+		if (state.cronSelectedId !== null) {
+			const idx = state.cronJobs.findIndex((j) => j.id === state.cronSelectedId);
+			if (idx >= 0) state.cronSelected = idx;
+		}
+		syncCronSelection();
+	};
+
 	const refresh = () => {
 		const { rows, meta } = collect();
 		if (notifyEnabled) detectTransitions(rows, state.prevStatus);
 		sortRows(rows);
 		state.rows = rows;
 		state.meta = meta;
+		state.cronJobs = collectScheduledJobs();
 		restoreSelection();
+		restoreCronSelection();
 		draw();
 	};
 
@@ -1653,9 +2244,107 @@ if (!watch) {
 						}
 					return true;
 				}
+				case "c":
+					if (state.cronJobs.length > 0) {
+						state.mode = "cron";
+						syncCronSelection();
+						state.pendingTrigger = null;
+					}
+					return true;
 				case "q":
 					cleanup();
 					return false;
+				default:
+					return false; // 无关按键,不重绘
+			}
+		} else if (state.mode === "cron") {
+			switch (key) {
+				case "\x1b[A":
+				case "k":
+					state.cronSelected--;
+					return true;
+				case "\x1b[B":
+				case "j":
+					state.cronSelected++;
+					return true;
+				case "g":
+					state.cronSelected = 0;
+					return true;
+				case "G":
+					state.cronSelected = state.cronJobs.length - 1;
+					return true;
+				case "\r":
+				case "e":
+				case " ": {
+					const job = state.cronJobs[state.cronSelected];
+					if (job) {
+						state.mode = "cronDetail";
+						state.scroll = 0;
+						return true;
+					}
+					return false;
+				}
+				case "r": {
+					const job = state.cronJobs[state.cronSelected];
+					if (!job) return false;
+					const now = Date.now();
+					if (state.pendingTrigger && state.pendingTrigger.id === job.id && now - state.pendingTrigger.ts <= 10000) {
+						state.pendingTrigger = null;
+						state.notice = { text: triggerJob(job), ts: now };
+					} else {
+						state.pendingTrigger = { id: job.id, ts: now };
+						state.notice = null;
+					}
+					return true;
+				}
+				case "c":
+				case "\x1b":
+				case "q":
+					state.mode = "list";
+					state.pendingTrigger = null;
+					return true;
+				default:
+					return false; // 无关按键,不重绘
+			}
+		} else if (state.mode === "cronDetail") {
+			switch (key) {
+				case "\x1b":
+				case "q":
+					state.mode = "cron";
+					return true;
+				case "r": {
+					const job = state.cronJobs[state.cronSelected];
+					if (!job) return false;
+					const now = Date.now();
+					if (state.pendingTrigger && state.pendingTrigger.id === job.id && now - state.pendingTrigger.ts <= 10000) {
+						state.pendingTrigger = null;
+						state.notice = { text: triggerJob(job), ts: now };
+					} else {
+						state.pendingTrigger = { id: job.id, ts: now };
+						state.notice = null;
+					}
+					return true;
+				}
+				case "\x1b[A":
+				case "k":
+					state.scroll--;
+					return true;
+				case "\x1b[B":
+				case "j":
+					state.scroll++;
+					return true;
+				case "\x1b[5~":
+					state.scroll -= pageSize();
+					return true;
+				case "\x1b[6~":
+					state.scroll += pageSize();
+					return true;
+				case "g":
+					state.scroll = 0;
+					return true;
+				case "G":
+					state.scroll = state.maxScroll;
+					return true;
 				default:
 					return false; // 无关按键,不重绘
 			}
@@ -1727,6 +2416,7 @@ if (!watch) {
 	const dispatch = (key) => {
 		if (handleKey(key)) {
 			syncSelection();
+			syncCronSelection();
 			state.scroll = Math.max(0, state.scroll);
 			draw();
 		}

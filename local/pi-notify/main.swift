@@ -1,13 +1,18 @@
 // pi-notify: tiny macOS notification tool built on UNUserNotification.
 //
 // Usage:
-//   pi-notify send <title> <body> [activateBundleId] [identifier]
+//   pi-notify send <title> <body> [activateBundleId] [identifier] [openPath] [sound]
 //
 // - Sends a notification, then exits.
 // - Reusing an identifier replaces the previous notification (no piling up).
 // - When the user clicks the notification, macOS relaunches this app with no
-//   arguments; the didReceive handler activates the app whose bundle id was
-//   recorded in the notification's userInfo, then exits.
+//   arguments; the didReceive handler acts on the notification's userInfo and
+//   exits:
+//   - openPath set (6th arg): open that file/URL with its default app
+//   - activateBundleId set (4th arg): activate that app
+//   - neither: no action
+// - sound (7th arg, optional): system sound name (e.g. Glass, Sosumi, Basso
+//   from /System/Library/Sounds) played with the notification.
 
 import Cocoa
 import UserNotifications
@@ -19,6 +24,14 @@ final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelega
 		withCompletionHandler completionHandler: @escaping () -> Void
 	) {
 		let info = response.notification.request.content.userInfo
+		if let openPath = info["openPath"] as? String, !openPath.isEmpty {
+			let config = NSWorkspace.OpenConfiguration()
+			config.activates = true
+			NSWorkspace.shared.open(URL(fileURLWithPath: openPath), configuration: config) { _, _ in
+				exit(0)
+			}
+			return
+		}
 		if let bundleId = info["activateBundleId"] as? String,
 			!bundleId.isEmpty,
 			let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId)
@@ -48,11 +61,21 @@ let center = UNUserNotificationCenter.current()
 let delegate = NotificationCenterDelegate()
 center.delegate = delegate
 
-func send(title: String, body: String, activateBundleId: String, identifier: String) -> Never {
+func send(
+	title: String,
+	body: String,
+	activateBundleId: String,
+	identifier: String,
+	openPath: String,
+	sound: String
+) -> Never {
 	let content = UNMutableNotificationContent()
 	content.title = title
 	content.body = body
-	content.userInfo = ["activateBundleId": activateBundleId]
+	content.userInfo = ["activateBundleId": activateBundleId, "openPath": openPath]
+	if !sound.isEmpty {
+		content.sound = UNNotificationSound(named: UNNotificationSoundName(sound))
+	}
 	let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
 	let sem = DispatchSemaphore(value: 0)
 	center.requestAuthorization(options: [.alert]) { _, _ in
@@ -89,7 +112,11 @@ if args.count >= 2 && args[1] == "send" {
 	let body = args.count > 3 ? args[3] : ""
 	let bundleId = args.count > 4 ? args[4] : ""
 	let identifier = args.count > 5 ? args[5] : "pi-notify"
-	send(title: title, body: body, activateBundleId: bundleId, identifier: identifier)
+	let openPath = args.count > 6 ? args[6] : ""
+	let sound = args.count > 7 ? args[7] : ""
+	send(
+		title: title, body: body, activateBundleId: bundleId, identifier: identifier,
+		openPath: openPath, sound: sound)
 } else {
 	// Relaunched by the system on notification click. Run the event loop so
 	// didReceive can fire; exit from the callback or after a timeout.
