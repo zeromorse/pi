@@ -1767,7 +1767,7 @@ function cronSummaryLines() {
 			`  ${color}${pad(label, 4)}${ANSI.reset} ${pad(truncate(j.name, 26), 26)} ${ANSI.dim}${pad(j.schedule, 13)} 上次 ${fmtDateTime(j.lastRunMs)}  ${truncate(jobNote(j), 40)}${ANSI.reset}`,
 		);
 	}
-	lines.push(`${ANSI.dim}  详情: node local/pi-dashboard.mjs -w 后按 c,或 --cron${ANSI.reset}`);
+	lines.push(`${ANSI.dim}  详情: node local/pi-dashboard/pi-dashboard.mjs -w 后按 c,或 --cron${ANSI.reset}`);
 	return lines;
 }
 

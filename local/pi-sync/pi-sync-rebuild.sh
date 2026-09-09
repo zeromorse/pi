@@ -16,11 +16,11 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(dirname "$SCRIPT_DIR")"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NODE_BIN="/Users/duanyanlong/.nvm/versions/node/v22.22.3/bin"
 PI_BIN="$HOME/.local/bin/pi"
 MERGE_TOOL="$SCRIPT_DIR/pi-sync-merge-changelog.py"
-PI_NOTIFY="$SCRIPT_DIR/pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify"
+PI_NOTIFY="$SCRIPT_DIR/../pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify"
 LOG_FILE="$HOME/Library/Logs/pi-sync.log"
 LOCK_DIR="/tmp/pi-sync.lock"
 TMP_DIR="$(mktemp -d /tmp/pi-sync.XXXXXX)"
