@@ -88,6 +88,13 @@ git fetch origin main || die "git fetch origin main failed (network?)"
 # --- 3. nothing to do when main is current and my-main contains it
 if [ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] \
     && git merge-base --is-ancestor main my-main; then
+    # local my-main commits (e.g. manual fixes) still need mirroring even
+    # when upstream is quiet; push is idempotent when nothing changed
+    if [ "$(git rev-parse my-main)" != "$(git rev-parse fork/my-main 2>/dev/null)" ]; then
+        log "my-main ahead of fork, pushing before exit"
+        git push fork my-main \
+            || log "WARNING: git push fork my-main failed, will retry next run"
+    fi
     log "up to date, nothing to do"
     exit 0
 fi
