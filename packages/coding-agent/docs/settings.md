@@ -29,6 +29,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 |---------|------|---------|-------------|
 | `defaultProvider` | string | - | Startup provider (e.g., `"anthropic"`, `"openai"`; saved with Ctrl+S in `/model`, or edited manually) |
 | `defaultModel` | string | - | Startup model ID (saved with Ctrl+S in `/model`, or edited manually) |
+| `defaultFlashProvider` | string | - | Provider of the flash (lightweight) model toggled via `/flash`; edited manually in global or project settings (project overrides global) |
+| `defaultFlashModel` | string | - | Model ID of the flash (lightweight) model toggled via `/flash`; edited manually in global or project settings (project overrides global) |
 | `defaultThinkingLevel` | string | - | Startup thinking level (saved with Ctrl+S in `/thinking`, or edited manually): `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
 | `modelThinkingLevels` | object | - | Per-model startup thinking levels keyed by `"provider/modelId"`; configure from `/settings` → Default thinking level per model or edit manually |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
@@ -323,6 +325,8 @@ See [packages.md](packages.md) for package management details.
 {
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-20250514",
+  "defaultFlashProvider": "anthropic",
+  "defaultFlashModel": "claude-haiku-4-5",
   "defaultThinkingLevel": "medium",
   "modelThinkingLevels": {
     "anthropic/claude-sonnet-4-20250514": "high"

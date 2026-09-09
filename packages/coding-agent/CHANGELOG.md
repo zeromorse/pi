@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `defaultFlashProvider` and `defaultFlashModel` settings (global or project scope; project overrides global) and a `/flash` command that toggles between the default model and the flash model before running a task. The `/model` selector marks the flash model with a `· default-flash` badge (model rows and provider rows) and sorts it after the default model.
 - Added `ctx.modelRegistry.stream()` and `streamSimple()` for extension model calls through configured providers with resolved authentication ([#8964](https://github.com/earendil-works/pi/issues/8964)).
 - Added `/btw <message>` (also `btw <message>`): ask a side question while the agent is busy. The answer streams immediately via a one-off LLM call over the current conversation snapshot, without interrupting the agent and without entering the session history. When the agent is idle, the message is sent as a normal prompt.
 - Added `/new <name>`, `/fork <name>`, and `/clone <name>` to name the new session directly; also supported via RPC `new_session` and `clone` commands' `name` fields and the extension/SDK `newSession()` and `fork()` `name` options.

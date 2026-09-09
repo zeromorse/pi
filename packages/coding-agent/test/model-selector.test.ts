@@ -378,4 +378,76 @@ describe("two-level provider → model navigation", () => {
 		expect(drilled.some((l) => l.includes("alpha-1 [alpha]"))).toBe(true);
 		selector.dispose();
 	});
+
+	it("marks default and flash models with badges and sorts them first", async () => {
+		const { runtime, tempDir } = await runtimeWithModels({
+			solo: [
+				{ id: "model-1", name: "One" },
+				{ id: "model-2", name: "Two" },
+				{ id: "model-3", name: "Three" },
+			],
+		});
+		tempDirs.push(tempDir);
+
+		// Single provider: the model list is shown directly.
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			undefined,
+			runtime,
+			[],
+			() => {},
+			() => {},
+			undefined,
+			undefined,
+			{ provider: "solo", id: "model-2" },
+			{ provider: "solo", id: "model-3" },
+		);
+
+		const lines = renderLines(selector);
+		// Default sorts first, flash second, remaining models after.
+		expect(highlightedId(lines)).toBe("model-2");
+		expect(lines.findIndex((l) => l.includes("model-2 [solo]"))).toBeLessThan(
+			lines.findIndex((l) => l.includes("model-3 [solo]")),
+		);
+		expect(lines.findIndex((l) => l.includes("model-3 [solo]"))).toBeLessThan(
+			lines.findIndex((l) => l.includes("model-1 [solo]")),
+		);
+		// Badge text on the marked rows only.
+		expect(lines.some((l) => l.includes("model-2 [solo] · default"))).toBe(true);
+		expect(lines.some((l) => l.includes("model-3 [solo] · default-flash"))).toBe(true);
+		const unmarked = lines.find((l) => l.includes("model-1 [solo]"));
+		expect(unmarked?.includes("default")).toBe(false);
+		selector.dispose();
+	});
+
+	it("marks providers containing the default or flash model", async () => {
+		const { runtime, tempDir } = await runtimeWithModels({
+			alpha: [
+				{ id: "alpha-1", name: "Alpha One" },
+				{ id: "alpha-2", name: "Alpha Two" },
+				{ id: "alpha-3", name: "Alpha Three" },
+			],
+			beta: [{ id: "beta-1", name: "Beta One" }],
+		});
+		tempDirs.push(tempDir);
+
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			undefined,
+			runtime,
+			[],
+			() => {},
+			() => {},
+			undefined,
+			undefined,
+			{ provider: "alpha", id: "alpha-1" },
+			{ provider: "alpha", id: "alpha-2" },
+		);
+
+		const lines = renderLines(selector);
+		expect(lines.some((l) => l.includes("alpha (3) · default · default-flash"))).toBe(true);
+		const betaLine = lines.find((l) => l.includes("beta (1)"));
+		expect(betaLine?.includes("default")).toBe(false);
+		selector.dispose();
+	});
 });

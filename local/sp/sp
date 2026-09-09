@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+# sp — save & push: stage 变更,用 pi(default-flash 模型)生成 commit message,提交并推送。
+#
+# 流程: stage → 展示清单 → pi 生成 message → 确认 → commit → push。
+# 生成 message 时 pi 会加载目标仓库的 AGENTS.md 等上下文,commit 规范自动遵循。
+#
+# 用法: sp [选项] [路径...]
+#   无路径参数时 stage 全部变更(修改/删除/未跟踪文件);指定路径时只 stage 那些路径。
+#
+# 环境变量:
+#   PI_BIN         pi 可执行文件(默认 PATH 中的 pi)
+#   SP_DIFF_LIMIT  送给模型的 diff 最大字符数(默认 65536)
+set -u
+
+PI_BIN="${PI_BIN:-pi}"
+SP_DIFF_LIMIT="${SP_DIFF_LIMIT:-65536}"
+
+if [[ -t 1 ]]; then
+	C_G=$'\033[32m'; C_Y=$'\033[33m'; C_R=$'\033[31m'; C_B=$'\033[1m'; C_M=$'\033[2m'; C_0=$'\033[0m'
+else
+	C_G=''; C_Y=''; C_R=''; C_B=''; C_M=''; C_0=''
+fi
+
+info() { printf '%s\n' "${C_B}sp${C_0}: $*" >&2; }
+ok()   { printf '%s\n' "${C_G}sp${C_0}: $*" >&2; }
+warn() { printf '%s\n' "${C_Y}sp${C_0}: $*" >&2; }
+die()  { printf '%s\n' "${C_R}sp${C_0}: $*" >&2; exit 1; }
+
+usage() {
+	cat <<'EOF'
+sp — save & push: stage 变更,用 pi(default-flash 模型)生成 commit message,提交并推送。
+
+用法:
+  sp [选项] [路径...]
+
+  无路径参数时 stage 全部变更(修改/删除/未跟踪文件);指定路径时只 stage 那些路径。
+
+选项:
+  -y, --yes           全自动,不询问(stage → 生成 message → commit → push)
+  -m, --message MSG   不用 AI,直接用指定 message
+      --model SPEC    覆盖生成 message 的模型(SPEC 形如 "provider/model" 或 "model")
+      --dry-run       stage 并生成 message,但不 commit/push
+  -h, --help          显示本帮助
+
+环境变量:
+  PI_BIN              pi 可执行文件(默认 PATH 中的 pi)
+  SP_DIFF_LIMIT       送给模型的 diff 最大字符数(默认 65536)
+
+模型选择: 默认读 ~/.pi/agent/settings.json 的 defaultFlashProvider +
+defaultFlashModel;--model 可覆盖。commit 规范来自 pi 加载的仓库上下文
+(AGENTS.md 等)与近期提交风格。
+EOF
+}
+
+# ---------------------------------------------------------------- 参数解析
+
+auto_yes=0
+dry_run=0
+edit=0
+msg=""
+model_override=""
+paths=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-y|--yes) auto_yes=1 ;;
+		-m|--message)
+			[[ $# -ge 2 ]] || die "-m requires an argument"
+			msg="$2"; shift ;;
+		--model)
+			[[ $# -ge 2 ]] || die "--model requires an argument"
+			model_override="$2"; shift ;;
+		--dry-run) dry_run=1 ;;
+		-h|--help) usage; exit 0 ;;
+		--) shift; while [[ $# -gt 0 ]]; do paths+=("$1"); shift; done; break ;;
+		-*) die "unknown option: $1 (see sp --help)" ;;
+		*) paths+=("$1") ;;
+	esac
+	shift
+done
+
+# ---------------------------------------------------------------- 前置检查
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+	|| die "not inside a git work tree"
+
+[[ -n $(git status --porcelain 2>/dev/null) ]] || {
+	# 没有未提交内容: 若领先远程则只 push
+	if git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+		ahead=$(git rev-list --count '@{u}'..HEAD 2>/dev/null || echo 0)
+		if (( ahead > 0 )); then
+			ok "nothing to commit; pushing $ahead commit(s)"
+			git push || die "push failed"
+			exit 0
+		fi
+	fi
+	ok "nothing to commit or push"
+	exit 0
+}
+
+# ---------------------------------------------------------------- stage
+
+if [[ ${#paths[@]} -gt 0 ]]; then
+	info "staging ${#paths[@]} path(s)"
+	git add -- "${paths[@]}" || die "git add failed"
+else
+	git add -A || die "git add failed"
+fi
+
+git diff --cached --quiet >/dev/null 2>&1 \
+	&& die "nothing staged (all changes ignored?)"
+
+staged_files=$(git diff --cached --name-status)
+stat_out=$(git diff --cached --stat)
+printf '%s\n' "${C_M}--- staged ---${C_0}" >&2
+printf '%s\n' "$staged_files" >&2
+
+# ---------------------------------------------------------------- 生成 message
+
+clean_msg() {
+	# 去掉行尾空白与 markdown fence 行,再裁掉首尾空行(保留行间结构)
+	printf '%s\n' "$1" \
+		| sed -e 's/[[:space:]]*$//' -e '/^```/d' \
+		| awk '
+			{ lines[NR] = $0 }
+			END {
+				first = 0; last = 0
+				for (i = 1; i <= NR; i++) if (lines[i] ~ /[^ \t]/) { first = i; break }
+				for (i = NR; i >= 1; i--) if (lines[i] ~ /[^ \t]/) { last = i; break }
+				if (first) for (i = first; i <= last; i++) print lines[i]
+			}'
+}
+
+read_flash_config() {
+	# 输出两行: provider model(可能为空)
+	command -v node >/dev/null 2>&1 || { echo ""; echo ""; return; }
+	node -e '
+		const fs = require("fs");
+		const path = require("path");
+		try {
+			const s = JSON.parse(fs.readFileSync(
+				path.join(process.env.HOME, ".pi", "agent", "settings.json"), "utf8"));
+			process.stdout.write((s.defaultFlashProvider || "") + "\n" + (s.defaultFlashModel || ""));
+		} catch { process.stdout.write("\n"); }
+	' 2>/dev/null || { echo ""; echo ""; }
+}
+
+generate_message() {
+	local provider="" model=""
+	if [[ -n $model_override ]]; then
+		if [[ $model_override == */* ]]; then
+			provider=${model_override%%/*}
+			model=${model_override#*/}
+		else
+			model=$model_override
+		fi
+	else
+		local flash_cfg
+		flash_cfg=$(read_flash_config)
+		provider=$(sed -n 1p <<<"$flash_cfg")
+		model=$(sed -n 2p <<<"$flash_cfg")
+	fi
+
+	local pi_args=()
+	[[ -n $provider ]] && pi_args+=(--provider "$provider")
+	[[ -n $model ]] && pi_args+=(--model "$model")
+
+	local model_desc
+	if [[ -n $model ]]; then
+		model_desc="$model"
+		[[ -n $provider ]] && model_desc="$model ($provider)"
+	else
+		model_desc="pi default model"
+	fi
+
+	local recent_log
+	recent_log=$(git log --oneline -10 2>/dev/null || true)
+
+	local diff_body
+	diff_body=$(git diff --cached)
+	if (( ${#diff_body} > SP_DIFF_LIMIT )); then
+		diff_body="${diff_body:0:SP_DIFF_LIMIT}
+... diff truncated at $SP_DIFF_LIMIT chars; full diff: git diff --cached"
+	fi
+
+	local prompt_file err_file
+	prompt_file=$(mktemp "${TMPDIR:-/tmp}/sp-prompt.XXXXXX")
+	err_file=$(mktemp "${TMPDIR:-/tmp}/sp-err.XXXXXX")
+
+	{
+		cat <<'PROMPT_HEAD'
+You are a commit message generator. You are given the recent commit
+history, a summary, and the diff of the staged changes in a git repository.
+
+Write exactly one commit message describing the staged changes.
+
+Rules:
+- Follow the repository's commit conventions, if evident from the recent
+  commits or the repository context files (e.g. AGENTS.md).
+- First line: a concise summary of the change.
+- Only if the change needs more explanation: a blank line, then a short body.
+- No emojis. No markdown code fences. Output ONLY the commit message.
+
+Recent commits:
+PROMPT_HEAD
+		printf '%s\n' "$recent_log"
+		echo
+		echo "Staged changes:"
+		printf '%s\n' "$stat_out"
+		echo
+		echo "Staged diff (may be truncated):"
+		printf '%s\n' "$diff_body"
+	} > "$prompt_file"
+
+	info "generating commit message with $model_desc ..."
+	local raw rc
+	raw=$("$PI_BIN" ${pi_args[@]+"${pi_args[@]}"} -p \
+		--no-tools --no-skills --no-session --thinking off \
+		"@$prompt_file" 2>"$err_file")
+	rc=$?
+
+	rm -f "$prompt_file"
+
+	if (( rc != 0 )) || [[ -z $(printf '%s' "$raw" | tr -d '[:space:]') ]]; then
+		warn "AI commit message generation failed (exit $rc)"
+		[[ -s $err_file ]] && { echo "--- pi stderr ---" >&2; cat "$err_file" >&2; }
+		rm -f "$err_file"
+		if [[ $auto_yes -eq 1 ]] || [[ ! -t 0 ]]; then
+			die "aborting; use -m \"<message>\" to commit manually"
+		fi
+		printf 'enter commit message manually (empty to abort): ' >&2
+		read -r msg
+		[[ -n $msg ]] || die "aborted"
+		printf '%s\n' "$msg"
+		return
+	fi
+
+	rm -f "$err_file"
+
+	clean_msg "$raw"
+}
+
+if [[ -z $msg ]]; then
+	msg=$(generate_message) || exit 1
+	[[ -n $msg ]] || die "empty commit message"
+fi
+
+printf '%s\n' "${C_M}--- commit message ---${C_0}" >&2
+printf '%s\n' "$msg" >&2
+echo >&2
+
+if [[ $dry_run -eq 1 ]]; then
+	ok "dry run: staged, message generated, not committing"
+	exit 0
+fi
+
+# ---------------------------------------------------------------- 确认
+
+if [[ $auto_yes -ne 1 ]]; then
+	[[ -t 0 ]] || die "stdin is not a terminal; use -y for non-interactive runs"
+	printf 'commit with this message? [%sEnter%s=yes, %se%s=edit, %sn%s=abort] ' \
+		"$C_B" "$C_0" "$C_B" "$C_0" "$C_B" "$C_0" >&2
+	read -r answer
+	case "$answer" in
+		""|y|Y|yes) ;;
+		e|E|edit) edit=1 ;;
+		*) die "aborted (changes remain staged)" ;;
+	esac
+fi
+
+# ---------------------------------------------------------------- commit
+
+commit_now() {
+	local out rc
+	if [[ ${1:-} == "allow-lockfile" ]]; then
+		out=$(PI_ALLOW_LOCKFILE_CHANGE=1 git commit -m "$msg" 2>&1)
+	else
+		out=$(git commit -m "$msg" 2>&1)
+	fi
+	rc=$?
+	if (( rc != 0 )); then
+		printf '%s\n' "$out" >&2
+		if grep -q "PI_ALLOW_LOCKFILE_CHANGE=1 git commit" <<<"$out"; then
+			if [[ $auto_yes -eq 1 ]]; then
+				die "lockfile commit blocked by pre-commit; rerun without -y to confirm, or set PI_ALLOW_LOCKFILE_CHANGE=1"
+			fi
+			printf 'lockfile change blocked by pre-commit. retry with PI_ALLOW_LOCKFILE_CHANGE=1? [y/N] ' >&2
+			read -r ans
+			[[ $ans == y || $ans == Y ]] || die "aborted (changes remain staged)"
+			commit_now allow-lockfile
+			return
+		fi
+		die "commit failed (changes remain staged)"
+	fi
+}
+
+if [[ $edit -eq 1 ]]; then
+	git commit -e -m "$msg" || die "commit aborted/failed"
+else
+	commit_now
+fi
+
+ok "committed $(git rev-parse --short HEAD)"
+
+# ---------------------------------------------------------------- push
+
+if [[ -z $(git remote) ]]; then
+	warn "no remote configured; skipping push"
+	exit 0
+fi
+
+if git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+	info "pushing to $(git rev-parse --abbrev-ref '@{u}')"
+	git push || die "push failed"
+else
+	if [[ $auto_yes -eq 1 ]]; then
+		info "no upstream; pushing with -u origin"
+		git push -u origin HEAD || die "push failed"
+	else
+		[[ -t 0 ]] || die "branch has no upstream and stdin is not a terminal; use -y"
+		printf 'branch has no upstream. push with -u origin? [Y/n] ' >&2
+		read -r ans
+		if [[ $ans != n && $ans != N ]]; then
+			git push -u origin HEAD || die "push failed"
+		else
+			warn "skipping push (no upstream)"
+		fi
+	fi
+fi
+
+ok "done"

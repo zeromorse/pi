@@ -9,6 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
+import { modelsAreEqual } from "@earendil-works/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -2984,6 +2985,12 @@ export class InteractiveMode {
 				await this.handleModelCommand(searchTerm);
 				return;
 			}
+			if (text === "/flash" || text.startsWith("/flash ")) {
+				const searchTerm = text.startsWith("/flash ") ? text.slice(7).trim() : undefined;
+				this.editor.setText("");
+				await this.handleFlashCommand(searchTerm);
+				return;
+			}
 			if (text === "/thinking" || text.startsWith("/thinking ")) {
 				const searchTerm = text.startsWith("/thinking ") ? text.slice(10).trim() : undefined;
 				this.editor.setText("");
@@ -4928,20 +4935,73 @@ export class InteractiveMode {
 
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
-			try {
-				await this.session.setModel(model, { persist: false });
-				this.footer.invalidate();
-				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
-			} catch (error) {
-				this.showError(error instanceof Error ? error.message : String(error));
-			}
+			await this.applyModelSwitch(model, `Model: ${model.id}`);
 			return;
 		}
 
 		this.showModelSelector(searchTerm);
+	}
+
+	/**
+	 * `/flash` toggles between the default model and the configured flash model
+	 * (defaultFlashProvider + defaultFlashModel in settings.json, project scope overrides global).
+	 */
+	private async handleFlashCommand(searchTerm?: string): Promise<void> {
+		if (searchTerm) {
+			this.showWarning(
+				"Usage: /flash (no arguments). Set defaultFlashProvider + defaultFlashModel in settings.json (global or project scope).",
+			);
+			return;
+		}
+
+		const flashProvider = this.settingsManager.getDefaultFlashProvider();
+		const flashModelId = this.settingsManager.getDefaultFlashModel();
+		if (!flashProvider || !flashModelId) {
+			this.showWarning(
+				"No flash model configured. Set defaultFlashProvider + defaultFlashModel in settings.json (global or project scope).",
+			);
+			return;
+		}
+
+		const flashModel = this.session.modelRuntime.getModel(flashProvider, flashModelId);
+		if (!flashModel) {
+			this.showWarning(
+				`Flash model ${flashProvider}/${flashModelId} not found. Fix defaultFlashProvider/defaultFlashModel in settings.json.`,
+			);
+			return;
+		}
+
+		// Toggle: currently on flash -> switch back to default; otherwise -> switch to flash.
+		if (modelsAreEqual(this.session.model, flashModel)) {
+			const defaultProvider = this.settingsManager.getDefaultProvider();
+			const defaultModelId = this.settingsManager.getDefaultModel();
+			if (!defaultProvider || !defaultModelId) {
+				this.showWarning("No default model configured. Open /model and use Ctrl+S to save one.");
+				return;
+			}
+			const defaultModel = this.session.modelRuntime.getModel(defaultProvider, defaultModelId);
+			if (!defaultModel) {
+				this.showWarning(`Default model ${defaultProvider}/${defaultModelId} not found.`);
+				return;
+			}
+			await this.applyModelSwitch(defaultModel, `Model: ${defaultModel.id} · default`);
+		} else {
+			await this.applyModelSwitch(flashModel, `Model: ${flashModel.id} · flash`);
+		}
+	}
+
+	/** Switch the session model and apply the standard UI updates. */
+	private async applyModelSwitch(model: Model<any>, statusMessage: string): Promise<void> {
+		try {
+			await this.session.setModel(model, { persist: false });
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(statusMessage);
+			void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+			this.checkDaxnutsEasterEgg(model);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
@@ -5088,6 +5148,8 @@ export class InteractiveMode {
 			};
 			const defaultProvider = this.settingsManager.getDefaultProvider();
 			const defaultModel = this.settingsManager.getDefaultModel();
+			const flashProvider = this.settingsManager.getDefaultFlashProvider();
+			const flashModel = this.settingsManager.getDefaultFlashModel();
 			const selector = new ModelSelectorComponent(
 				this.ui,
 				this.session.model,
@@ -5101,6 +5163,7 @@ export class InteractiveMode {
 				initialSearchInput,
 				(model) => selectModel(model, true),
 				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
+				flashProvider && flashModel ? { provider: flashProvider, id: flashModel } : undefined,
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});

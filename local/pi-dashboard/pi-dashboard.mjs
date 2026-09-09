@@ -5,7 +5,8 @@
  *
  * 用法:
  *   node pi-dashboard.mjs           单次输出(末尾附带定时任务摘要)
- *   node pi-dashboard.mjs -w        watch 模式,每 2s 刷新;会话完成/出错/卡死时发 macOS 通知
+ *   node pi-dashboard.mjs -w        watch 模式,每 2s 刷新
+ *   node pi-dashboard.mjs -w --notify  watch 模式,会话完成/出错/卡死时发 macOS 通知
  *                                 (安装 terminal-notifier 后点击通知可跳回 dashboard 所在终端:
  *                                  激活宿主 app;tmux 内精确切回 dashboard 的 window/pane)
  *
@@ -13,7 +14,7 @@
  *   node pi-dashboard.mjs -w -n 5   watch 模式,每 5s 刷新
  *   node pi-dashboard.mjs --all     不依赖进程,列出最近 24h 内有活动的所有会话
  *   node pi-dashboard.mjs --all --hours 72
- *   node pi-dashboard.mjs --no-notify  关闭 watch 模式的系统通知
+ *   node pi-dashboard.mjs --notify  开启 watch 模式的系统通知(默认关闭)
  *   node pi-dashboard.mjs --demo     渲染一段样例 markdown,预览详情视图高亮配色
  *   node pi-dashboard.mjs --cron    只看定时任务视图(pi 相关的 launchd/cron)
  *
@@ -1740,10 +1741,11 @@ function buildCronDetailLines(job) {
 function triggerJob(job) {
 	if (job.source === "launchd") {
 		try {
-			execFileSync("launchctl", ["kickstart", `gui/${process.getuid()}`, job.label]);
+			execFileSync("launchctl", ["kickstart", `gui/${process.getuid()}/${job.label}`]);
 			return `已触发 ${job.label} (launchctl kickstart,后台运行)`;
-		} catch {
-			return `触发失败: launchctl kickstart gui/$(id -u)/${job.label}`;
+		} catch (e) {
+			const err = String(e?.stderr ?? "").trim().split("\n")[0] ?? "";
+			return `触发失败: launchctl kickstart gui/$(id -u)/${job.label}${err ? ` — ${err}` : ""}`;
 		}
 	}
 	return `cron 任务请手动执行: ${truncate(job.cmd, 100)}`;
@@ -1950,14 +1952,14 @@ let watch = false;
 let interval = 2;
 let all = false;
 let hours = 24;
-let notifyEnabled = true;
+let notifyEnabled = false;
 for (let i = 0; i < args.length; i++) {
 	const a = args[i];
 	if (a === "-w" || a === "--watch") watch = true;
 	else if (a === "-n" || a === "--interval") interval = Math.max(1, parseInt(args[++i], 10) || 2);
 	else if (a === "--all") all = true;
 	else if (a === "--hours") hours = Math.max(1, parseFloat(args[++i]) || 24);
-	else if (a === "--no-notify") notifyEnabled = false;
+	else if (a === "--notify") notifyEnabled = true;
 }
 
 function collect() {

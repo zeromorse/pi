@@ -95,6 +95,8 @@ export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
+	defaultFlashProvider?: string;
+	defaultFlashModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
 	modelThinkingLevels?: Record<string, ThinkingLevel>; // per-model default thinking level overrides keyed by "provider/modelId"
 	transport?: TransportSetting; // default: "auto"
@@ -720,6 +722,14 @@ export class SettingsManager {
 
 	getDefaultModel(): string | undefined {
 		return this.settings.defaultModel;
+	}
+
+	getDefaultFlashProvider(): string | undefined {
+		return this.settings.defaultFlashProvider;
+	}
+
+	getDefaultFlashModel(): string | undefined {
+		return this.settings.defaultFlashModel;
 	}
 
 	setDefaultProvider(provider: string): void {

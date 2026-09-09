@@ -625,4 +625,40 @@ describe("SettingsManager", () => {
 			expect(manager.getShellPath()).toBe(homedir());
 		});
 	});
+
+	describe("flash model settings", () => {
+		it("should return undefined when flash model is not set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "anthropic" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getDefaultFlashProvider()).toBeUndefined();
+			expect(manager.getDefaultFlashModel()).toBeUndefined();
+		});
+
+		it("should load flash model from global settings", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ defaultFlashProvider: "anthropic", defaultFlashModel: "claude-haiku-4-5" }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getDefaultFlashProvider()).toBe("anthropic");
+			expect(manager.getDefaultFlashModel()).toBe("claude-haiku-4-5");
+		});
+
+		it("should let project settings override the global flash model", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ defaultFlashProvider: "anthropic", defaultFlashModel: "claude-haiku-4-5" }),
+			);
+			writeFileSync(
+				join(projectDir, ".pi", "settings.json"),
+				JSON.stringify({ defaultFlashModel: "gemini-3.8-flash" }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// Merged view: provider falls back to global, model overridden by project.
+			expect(manager.getDefaultFlashProvider()).toBe("anthropic");
+			expect(manager.getDefaultFlashModel()).toBe("gemini-3.8-flash");
+		});
+	});
 });

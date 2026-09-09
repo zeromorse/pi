@@ -14,4 +14,5 @@
 | `pi-pacer/` | pi 会话配速员(停滞检测 + RPC 复活) | [README.md](pi-pacer/README.md) |
 | `pi-sync/` | 定时 fork 同步 + 条件重建 | [README.md](pi-sync/README.md) |
 | `pi-usage-reflection/` | 定时 pi 使用反思 | [README.md](pi-usage-reflection/README.md) |
+| `sp/` | 保存并推送:stage + pi 生成 commit message + push | [README.md](sp/README.md) |
 | `piw/` | pi 重启循环 wrapper(让 `/restart` 在 tmux 外可用) | [README.md](piw/README.md) |

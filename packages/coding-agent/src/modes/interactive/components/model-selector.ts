@@ -80,6 +80,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private tui: TUI;
 	private scopedModels: ReadonlyArray<ScopedModelItem>;
 	private defaultModel?: DefaultModelReference;
+	private flashModel?: DefaultModelReference;
 	private scope: ModelScope = "all";
 	private scopeText?: Text;
 	private scopeHintText?: Text;
@@ -98,6 +99,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		initialSearchInput?: string,
 		onSelectAsDefault?: (model: Model<any>) => void,
 		defaultModel?: DefaultModelReference,
+		flashModel?: DefaultModelReference,
 	) {
 		super();
 
@@ -106,6 +108,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.modelRuntime = modelRuntime;
 		this.scopedModels = scopedModels;
 		this.defaultModel = defaultModel;
+		this.flashModel = flashModel;
 		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
 		this.onSelectAsDefaultCallback = onSelectAsDefault;
@@ -207,6 +210,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const bIsDefault = b.provider === this.defaultModel?.provider;
 			if (aIsDefault && !bIsDefault) return -1;
 			if (!aIsDefault && bIsDefault) return 1;
+			const aIsFlash = a.provider === this.flashModel?.provider;
+			const bIsFlash = b.provider === this.flashModel?.provider;
+			if (aIsFlash && !bIsFlash) return -1;
+			if (!aIsFlash && bIsFlash) return 1;
 			return 0;
 		});
 		this.providerItems = items;
@@ -270,6 +277,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const bIsDefault = this.isDefaultModel(b.model);
 			if (aIsDefault && !bIsDefault) return -1;
 			if (!aIsDefault && bIsDefault) return 1;
+			const aIsFlash = this.isFlashModel(a.model);
+			const bIsFlash = this.isFlashModel(b.model);
+			if (aIsFlash && !bIsFlash) return -1;
+			if (!aIsFlash && bIsFlash) return 1;
 			return a.provider.localeCompare(b.provider);
 		});
 		return sorted;
@@ -287,6 +298,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private isDefaultModel(model: Model<any>): boolean {
 		return this.defaultModel?.provider === model.provider && this.defaultModel.id === model.id;
+	}
+
+	private isFlashModel(model: Model<any>): boolean {
+		return this.flashModel?.provider === model.provider && this.flashModel.id === model.id;
 	}
 
 	private isDefaultSearch(query: string): boolean {
@@ -383,7 +398,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		if (effectiveQuery) {
 			const filtered = fuzzyFilter(source, effectiveQuery, (item) => {
 				const defaultText = this.isDefaultModel(item.model) ? " default" : "";
-				return `${getModelSelectorSearchText({ id: item.id, provider: item.provider, name: item.model.name })}${defaultText}`;
+				const flashText = this.isFlashModel(item.model) ? " default-flash" : "";
+				return `${getModelSelectorSearchText({ id: item.id, provider: item.provider, name: item.model.name })}${defaultText}${flashText}`;
 			});
 			if (this.isDefaultSearch(effectiveQuery)) {
 				const defaultItems = source.filter((item) => this.isDefaultModel(item.model));
@@ -432,13 +448,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.providerSelectedIndex;
 			const isCurrentProvider = this.currentModel?.provider === item.provider;
 			const isDefaultProvider = this.defaultModel?.provider === item.provider;
+			const isFlashProvider = this.flashModel?.provider === item.provider;
 
 			const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
 			const currentMarker = isCurrentProvider ? theme.fg("accent", "✓ ") : "  ";
 			const providerText = isSelected ? theme.fg("accent", item.provider) : item.provider;
 			const countBadge = theme.fg("muted", ` (${item.count})`);
 			const defaultBadge = isDefaultProvider ? theme.fg("muted", " · default") : "";
-			const line = `${cursor}${currentMarker}${providerText}${countBadge}${defaultBadge}`;
+			const flashBadge = isFlashProvider ? theme.fg("muted", " · default-flash") : "";
+			const line = `${cursor}${currentMarker}${providerText}${countBadge}${defaultBadge}${flashBadge}`;
 
 			this.listContainer.addChild(new Text(line, 0, 0));
 		}
@@ -474,13 +492,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.modelSelectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
 			const isDefault = this.isDefaultModel(item.model);
+			const isFlash = this.isFlashModel(item.model);
 			const defaultBadge = isDefault ? theme.fg("muted", " · default") : "";
+			const flashBadge = isFlash ? theme.fg("muted", " · default-flash") : "";
 
 			const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
 			const currentMarker = isCurrent ? theme.fg("accent", "✓ ") : "  ";
 			const modelText = isSelected ? theme.fg("accent", item.id) : item.id;
 			const providerBadge = theme.fg("muted", `[${item.provider}]`);
-			const line = `${cursor}${currentMarker}${modelText} ${providerBadge}${defaultBadge}`;
+			const line = `${cursor}${currentMarker}${modelText} ${providerBadge}${defaultBadge}${flashBadge}`;
 
 			this.listContainer.addChild(new Text(line, 0, 0));
 		}
