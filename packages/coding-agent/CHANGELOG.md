@@ -5,6 +5,10 @@
 ### Added
 
 - Added `ctx.modelRegistry.stream()` and `streamSimple()` for extension model calls through configured providers with resolved authentication ([#8964](https://github.com/earendil-works/pi/issues/8964)).
+- Added `/btw <message>` (also `btw <message>`): ask a side question while the agent is busy. The answer streams immediately via a one-off LLM call over the current conversation snapshot, without interrupting the agent and without entering the session history. When the agent is idle, the message is sent as a normal prompt.
+- Added `/new <name>`, `/fork <name>`, and `/clone <name>` to name the new session directly; also supported via RPC `new_session` and `clone` commands' `name` fields and the extension/SDK `newSession()` and `fork()` `name` options.
+- Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
+- Added tree entry preview: open a full-detail page for the selected entry in the `/tree` view with `Shift+P`, showing markdown-rendered message text, thinking blocks, highlighted tool call arguments (resolved from the originating assistant message for tool results), tool results, bash commands and output, and summaries, with keyboard scrolling, mouse-wheel scrolling, mouse-drag highlight, and `Ctrl+X` to copy the selection or the whole entry.
 
 ### Changed
 
@@ -15,13 +19,8 @@
 
 - Fixed premature missing-model errors after login by waiting for catalog discovery. Radius now defaults to `balanced`, falling back to the first available Radius model when needed.
 - Fixed `before_provider_request` and `after_provider_response` extension hooks not running for standalone LLM requests that bypass the agent loop (compaction and branch-summary summarization). Providers that require payload rewriting (for example proxies that only accept Claude Code-shaped requests) now see these requests too.
-
-### Added
-
-- Added `/btw <message>` (also `btw <message>`): ask a side question while the agent is busy. The answer streams immediately via a one-off LLM call over the current conversation snapshot, without interrupting the agent and without entering the session history. When the agent is idle, the message is sent as a normal prompt.
-- Added `/new <name>`, `/fork <name>`, and `/clone <name>` to name the new session directly; also supported via RPC `new_session` and `clone` commands' `name` fields and the extension/SDK `newSession()` and `fork()` `name` options.
-- Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
-- Added tree entry preview: open a full-detail page for the selected entry in the `/tree` view with `Shift+P`, showing markdown-rendered message text, thinking blocks, highlighted tool call arguments (resolved from the originating assistant message for tool results), tool results, bash commands and output, and summaries, with keyboard scrolling, mouse-wheel scrolling, mouse-drag highlight, and `Ctrl+X` to copy the selection or the whole entry.
+- Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).
+- Fixed fullscreen mode reserving a blank row for custom footers that render zero rows ([#8919](https://github.com/earendil-works/pi/issues/8919)).
 
 ## [0.85.1] - 2026-09-05
 
