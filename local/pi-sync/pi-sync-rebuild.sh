@@ -7,8 +7,9 @@
 #   push both branches. CHANGELOG conflicts are auto-resolved by
 #   pi-sync-merge-changelog.py (upstream verbatim + fork entries back under
 #   [Unreleased]); any other conflict aborts the merge for manual handling.
-# - pi-rebuild-global: when my-main advanced, rebuild dist/ with Node 22 so
-#   the globally linked `pi` command picks up the changes.
+# - pi-rebuild-global: when my-main advanced, refresh node_modules from the
+#   merged lockfile (upstream dep bumps leave it stale) and rebuild dist/
+#   with Node 22 so the globally linked `pi` command picks up the changes.
 #
 # Scheduled daily at 10:00 by ~/Library/LaunchAgents/com.zeromorse.pi-sync.plist.
 # Log: ~/Library/Logs/pi-sync.log
@@ -140,7 +141,16 @@ fi
 
 # --- 8. rebuild only when the merge advanced my-main
 if [ "$old_head" != "$new_head" ]; then
-    log "my-main advanced, rebuilding (node $(node --version))"
+    log "my-main advanced, refreshing deps + rebuilding (node $(node --version))"
+    # upstream dep bumps leave node_modules stale; align it with the merged
+    # lockfile before building (never runs lifecycle scripts)
+    npm install --ignore-scripts \
+        || die "npm install failed, run pi-rebuild-global manually"
+    if [ -n "$(git status --porcelain)" ]; then
+        log "npm install modified the working tree, manual fix required:"
+        git status --porcelain | sed 's/^/    /'
+        die "unexpected changes after npm install (lockfile drift?)"
+    fi
     if npm run build && "$PI_BIN" --version; then
         log "rebuild OK"
         notify "pi synced to $(git rev-parse --short "$new_head") and rebuilt"
