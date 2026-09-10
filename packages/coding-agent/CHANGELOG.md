@@ -22,6 +22,8 @@
 - Fixed `before_provider_request` and `after_provider_response` extension hooks not running for standalone LLM requests that bypass the agent loop (compaction and branch-summary summarization). Providers that require payload rewriting (for example proxies that only accept Claude Code-shaped requests) now see these requests too.
 - Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).
 - Fixed fullscreen mode reserving a blank row for custom footers that render zero rows ([#8919](https://github.com/earendil-works/pi/issues/8919)).
+- Capped agent-level retry backoff at `retry.maxAgentDelayMs` (60s by default) so long retry runs stay responsive during prolonged transient outages ([#8826](https://github.com/earendil-works/pi/issues/8826)).
+- Fixed extension tools without parameter schemas to be rejected during registration instead of breaking provider requests ([#9300](https://github.com/earendil-works/pi/issues/9300)).
 
 ## [0.85.1] - 2026-09-05
 
