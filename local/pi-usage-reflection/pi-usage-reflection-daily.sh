@@ -26,7 +26,7 @@ SKILL_LINK="$HOME/.pi/agent/skills/pi-usage-reflection"
 PI_BIN="$HOME/.local/bin/pi"
 # pi-notify: send <title> <body> <activateBundleId> <identifier> <openPath>
 # 点击通知时打开 openPath 指向的文件（成功=当日报告,失败=运行日志）
-PI_NOTIFY="$SCRIPT_DIR/../pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify"
+PI_NOTIFY="$HOME/Applications/pi-notify.app/Contents/MacOS/pi-notify"
 
 REPORT_DIR="$HOME/.pi-usage-reflection/reports"
 LOG_DIR="$HOME/.pi-usage-reflection/logs"

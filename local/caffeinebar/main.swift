@@ -58,13 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else {
             return true // 拿不到信息时保守视为接电源
         }
-        var sawPowerSource = false
         for ps in sources {
             guard let desc = IOPSGetPowerSourceDescription(snapshot, ps)?.takeUnretainedValue() as? [String: Any] else { continue }
-            if let state = desc[kIOPSPowerSourceStateKey] as? String {
-                sawPowerSource = true
-                if state == kIOPSBatteryPowerValue { return false } // 任一电池在放电 → 电池供电
-            }
+            if let state = desc[kIOPSPowerSourceStateKey] as? String,
+                state == kIOPSBatteryPowerValue { return false } // 任一电池在放电 → 电池供电
         }
         return true // 全部在充电 / 无电池设备（台式机）
     }
@@ -88,7 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intentionalStop = false
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-        task.arguments = ["-s"]
+        // -w 绑定本进程 pid:无论 CaffeineBar 正常退出还是被杀,caffeinate 都随之退出,避免泄漏导致"已关开关仍在防休眠"
+        task.arguments = ["-s", "-w", String(getpid())]
         task.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.caffeinateTask != nil else { return }

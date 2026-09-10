@@ -36,7 +36,7 @@ const TERM_BUNDLE_IDS: Record<string, string> = {
 function findPiNotify(): string | undefined {
 	const candidates = process.env.HOME
 		? [
-				`${process.env.HOME}/agent/pi/local/pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify`,
+				`${process.env.HOME}/Applications/pi-notify.app/Contents/MacOS/pi-notify`,
 				`${process.env.HOME}/.pi/agent/pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify`,
 			]
 		: [];

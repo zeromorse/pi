@@ -112,7 +112,8 @@ tmux kill-session -t pi-test
 Personal tooling built around pi (helper scripts, schedulers, dashboards, etc.) lives in `local/` in this repo — never in `~/.local/bin`, dotfiles, or other machine-global locations. The only exceptions are tools installed by third parties (`pi` itself, `terminal-notifier`, etc.). When adding a tool:
 
 - Add it under `local/` and document it in `local/README.md`.
-- System-level installers (launchd plists, symlinks) may point into `local/`, but their sources stay here.
+- `local/` holds sources only: source files, build scripts (`build.sh`), configs (`Info.plist`, `package.json`), and lockfiles. Build artifacts (compiled binaries, `.app` bundles, `out/`, `*.vsix`) never live here or in git — build into the OS-standard destination (`~/Applications` for macOS apps, `~/.vscode/extensions/` for VSCode extensions) and gitignore them per project.
+- System-level installers (launchd plists, symlinks) point at the built artifact's real location (e.g. `~/Applications`), not into `local/`. Each README documents the rebuild flow (e.g. `./build.sh && pkill -x <name>` with KeepAlive respawning the new binary).
 
 ## Changelog
 

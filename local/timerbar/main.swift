@@ -207,20 +207,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	/// pi-notify 二进制定位：仓库内相对路径 → HOME 绝对路径 → PATH。
+	/// pi-notify 二进制定位：~/Applications（与本 app 同目录）→ PATH。
 	private static func resolveNotifyBinary() -> String? {
 		var candidates: [String] = []
-		// 本 app 位于 local/timerbar/build/TimerBar.app，向上三级即 local/。
-		let localDir = Bundle.main.bundleURL
-			.deletingLastPathComponent()
-			.deletingLastPathComponent()
-			.deletingLastPathComponent()
+		// 本 app 与 pi-notify 均构建到 ~/Applications/。
+		let localDir = Bundle.main.bundleURL.deletingLastPathComponent()
 		candidates.append(
-			localDir.appendingPathComponent("pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify").path)
-		if let home = ProcessInfo.processInfo.environment["HOME"] {
-			candidates.append("\(home)/agent/pi/local/pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify")
-			candidates.append("\(home)/.pi/agent/pi-notify/build/pi-notify.app/Contents/MacOS/pi-notify")
-		}
+			localDir.appendingPathComponent("pi-notify.app/Contents/MacOS/pi-notify").path)
 		for dir in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
 			candidates.append("\(dir)/pi-notify")
 		}

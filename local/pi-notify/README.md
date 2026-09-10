@@ -11,11 +11,14 @@
 
 ## 构建
 
-源码 `main.swift` + `Info.plist` + `build.sh`(构建到 `build/pi-notify.app`,ad-hoc 签名)。注意:重新编译后 ad-hoc 重签可能重置通知权限,通知不弹时到系统设置重新允许 "pi"。
+源码 `main.swift` + `Info.plist` + `build.sh`(构建到 `~/Applications/pi-notify.app`,ad-hoc 签名;仓库只留源码)。注意:重新编译后 ad-hoc 重签可能重置通知权限,通知不弹时到系统设置重新允许 "pi"。
 
 ## 消费方
 
-- `~/.pi/agent/extensions/agent-done-notify.ts`(pi 运行结束触达,优先查本目录,`~/.pi/agent/pi-notify/` 为备用路径)
+均按 `~/Applications/pi-notify.app/Contents/MacOS/pi-notify` 查找:
+
+- `~/.pi/agent/extensions/agent-done-notify.ts`(pi 运行结束触达,`~/.pi/agent/pi-notify/` 为备用路径)
 - `pi-sync/pi-sync-rebuild.sh`(定时同步失败/成功通知)
 - `pi-usage-reflection/pi-usage-reflection-daily.sh`(每日反思报告通知,点击打开报告/运行日志)
+- TimerBar(倒计时结束通知,`~/Applications` 同目录查找 → PATH 兜底)
 - catpaw 侧的 `~/catpaw-desk-workspace/task/scripts/cron_ccmp_cost.sh`(成本巡检通知,点击打开当日报告/运行日志,取代了原 CCMP-Report.app applet)

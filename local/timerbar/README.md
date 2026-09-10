@@ -11,16 +11,16 @@ macOS 菜单栏倒计时器(原生 Swift,零依赖)。
 
 ## 构建
 
-`./build.sh`(产物 `build/TimerBar.app`,ad-hoc 签名)
+`./build.sh`(产物 `~/Applications/TimerBar.app`,ad-hoc 签名;仓库只留源码,产物是本机构建输出)
 
 ## 使用
 
-- 常驻:`open build/TimerBar.app`;菜单栏点开可开始/暂停/继续/重置、选时长、退出
-- 命令行启动即倒计时:`build/TimerBar.app/Contents/MacOS/TimerBar --start <秒>`(时长仅本次生效,不落盘)
+- 常驻:菜单栏点开可开始/暂停/继续/重置、选时长、退出
+- 命令行启动即倒计时:`~/Applications/TimerBar.app/Contents/MacOS/TimerBar --start <秒>`(时长仅本次生效,不落盘)
 
-## 可选:登录自启
+## 登录自启
 
-参考 caffeinebar,LaunchAgent 指向本目录 .app:
+`~/Library/LaunchAgents/com.zeromorse.timerbar.plist`:
 
 ```bash
 cat > ~/Library/LaunchAgents/com.zeromorse.timerbar.plist <<'EOF'
@@ -32,12 +32,15 @@ cat > ~/Library/LaunchAgents/com.zeromorse.timerbar.plist <<'EOF'
 	<string>com.zeromorse.timerbar</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/duanyanlong/agent/pi/local/timerbar/build/TimerBar.app/Contents/MacOS/TimerBar</string>
+		<string>/Users/duanyanlong/Applications/TimerBar.app/Contents/MacOS/TimerBar</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>StandardOutPath</key>
 	<string>/Users/duanyanlong/Library/Logs/timerbar.log</string>
 	<key>StandardErrorPath</key>
@@ -49,6 +52,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zeromorse.timerbar.p
 ```
 
 卸载自启:`launchctl bootout gui/$(id -u)/com.zeromorse.timerbar && rm ~/Library/LaunchAgents/com.zeromorse.timerbar.plist`
+
+KeepAlive 用条件式 `SuccessfulExit = false`:崩溃/被杀时 launchd 自动拉起;菜单点"退出"(正常退出,exit 0)不会被拉起,可正常退出。产物在 `~/Applications`,Spotlight/Launchpad 天然可搜到。
 
 ## 修改源码后重新编译
 

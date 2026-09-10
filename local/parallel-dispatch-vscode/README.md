@@ -24,6 +24,8 @@ URI handler，处理 `/launch` 路径），扩展为每个任务开一个终端 
 
 ## 构建 / 安装 / 更新
 
+构建产物(`out/`、`*.vsix`)不入库,本仓库只留源码:
+
 ```bash
 cd local/parallel-dispatch-vscode
 npm install --ignore-scripts
@@ -32,4 +34,4 @@ npx --yes @vscode/vsce package --allow-missing-repository --skip-license
 code --install-extension parallel-dispatch-0.1.0.vsix
 ```
 
-改代码后重新 package + install（版本号递增可避免缓存）。
+改代码后重新 package + install(版本号递增可避免缓存)。

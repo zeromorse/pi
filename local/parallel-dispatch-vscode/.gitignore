@@ -1,0 +1,3 @@
+# 构建产物不入库:源码 + package.json + lockfile 即可重建
+out/
+*.vsix
