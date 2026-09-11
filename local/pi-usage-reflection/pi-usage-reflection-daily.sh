@@ -2,7 +2,7 @@
 # pi-usage-reflection-daily.sh - scheduled pi usage reflection report.
 #
 # Invokes the pi-usage-reflection skill (this repo's
-# .pi/skills/pi-usage-reflection/) via `pi -p`, restricted to 1-day and
+# local/pi-usage-reflection/) via `pi -p`, restricted to 1-day and
 # 7-day windows (the skill's default 30-day window is skipped). The skill
 # is exposed as a user-level skill via symlink
 # ~/.pi/agent/skills/pi-usage-reflection (created idempotently below) so it
@@ -21,7 +21,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
-SKILL_SRC="$REPO/.pi/skills/pi-usage-reflection"
+SKILL_SRC="$REPO/local/pi-usage-reflection"
 SKILL_LINK="$HOME/.pi/agent/skills/pi-usage-reflection"
 PI_BIN="$HOME/.local/bin/pi"
 # pi-notify: send <title> <body> <activateBundleId> <identifier> <openPath>
