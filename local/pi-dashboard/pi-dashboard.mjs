@@ -40,7 +40,8 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SESSIONS_DIR = join(homedir(), ".pi/agent/sessions");
 const RUNTIME_DIR = join(homedir(), ".pi/agent/runtime");
@@ -57,19 +58,47 @@ const PI_WORD_RE = /(^|[^A-Za-z0-9_])pi([^A-Za-z0-9_]|$)/;
 // 日志行首时间戳: 2026-09-07 10:00:03 或 [2026-09-07 16:10:22]
 const LOG_TS_RE = /^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\]?/;
 const DOW_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-// 命令含 match 子串的 cron 任务显式指定证据日志(命令行无重定向/需按 agent 过滤时);
-// filter = 只保留含该子串的日志行(共享 cron.log 区分各 agent);尾部 exit=N / ERROR 行据此判定上次运行结果
-const FRONTIER_CRON_LOG = "~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log";
-const CRON_EVIDENCE = [
-	{ match: "cron_ccmp_cost.sh", logs: ["~/.ccmp/logs/cron.log"] },
-	{ match: "run_agent.sh doctor", logs: [FRONTIER_CRON_LOG], filter: "agent=doctor" },
-	{ match: "run_agent.sh engineer", logs: [FRONTIER_CRON_LOG], filter: "agent=engineer" },
-	{ match: "run_agent.sh scout", logs: [FRONTIER_CRON_LOG], filter: "agent=scout" },
-	{ match: "run_agent.sh curator", logs: [FRONTIER_CRON_LOG], filter: "agent=curator" },
-	{ match: "run_agent.sh critic", logs: [FRONTIER_CRON_LOG], filter: "agent=critic" },
-	{ match: "run_agent.sh planner", logs: [FRONTIER_CRON_LOG], filter: "agent=planner" },
-];
 const CRON_CACHE_SEC = 60; // crontab/plutil/launchctl 是外部命令,不值得每 2s 刷
+
+// 证据日志声明(cron-evidence.json,与本脚本同目录): 任务命令含 match 子串时用声明的
+// logs(支持 ~ 前缀)替代命令行重定向解析——覆盖命令行无重定向(如 ccmp 巡检脚本自写
+// scheduler.log)与多任务共享一份 cron.log(frontier-radar 需按 filter 子串过滤行)两类场景;
+// 尾部 exit=N / ERROR 行据此判定上次运行结果,launchd 与 cron 来源通用。
+// collectScheduledJobs 每次缓存过期时重读,watch 模式下改配置无需重启。
+// 文件不存在 = 无声明(合法);存在但损坏/格式错 = stderr 警告一次并按无声明处理。
+const EVIDENCE_CONFIG = join(dirname(fileURLToPath(import.meta.url)), "cron-evidence.json");
+let cronEvidence = [];
+let cronEvidenceWarned = false;
+function loadCronEvidence() {
+	let text;
+	try {
+		text = readFileSync(EVIDENCE_CONFIG, "utf8");
+	} catch {
+		cronEvidence = [];
+		return;
+	}
+	let data = null;
+	try {
+		data = JSON.parse(text);
+	} catch (e) {
+		if (!cronEvidenceWarned) {
+			process.stderr.write(`pi-dashboard: ${basename(EVIDENCE_CONFIG)} 解析失败,按无声明处理 (${e.message})\n`);
+			cronEvidenceWarned = true;
+		}
+		cronEvidence = [];
+		return;
+	}
+	cronEvidence = Array.isArray(data)
+		? data.filter(
+				(e) =>
+					typeof e?.match === "string" &&
+					e.match !== "" &&
+					Array.isArray(e.logs) &&
+					e.logs.every((l) => typeof l === "string" && l !== "") &&
+					(e.filter === undefined || typeof e.filter === "string"),
+			)
+		: [];
+}
 
 // ---------- 进程发现 ----------
 
@@ -586,10 +615,10 @@ function cronScheduleText(min, hour, dom, mon, dow) {
 	return `${min} ${hour} ${dom} ${mon} ${dow}`;
 }
 
-// cron 任务的证据日志: 显式配置优先(可带 filter 行过滤),否则解析命令里的 >> / > 重定向
+// cron 任务的证据日志: cron-evidence.json 声明优先(可带 filter 行过滤),否则解析命令里的 >> / > 重定向
 // (相对路径按 cd 目录展开;2>&1 / /dev/null 忽略)
 function evidenceLogsOfCron(cmd) {
-	for (const ev of CRON_EVIDENCE) {
+	for (const ev of cronEvidence) {
 		if (cmd.includes(ev.match)) {
 			return {
 				logs: ev.logs.map((p) => p.replace(/^~(?=\/)/, homedir())),
@@ -678,6 +707,7 @@ let schedCache = null; // { ts, jobs }
 function collectScheduledJobs() {
 	const now = Date.now();
 	if (schedCache && now - schedCache.ts < CRON_CACHE_SEC * 1000) return schedCache.jobs;
+	loadCronEvidence();
 	const jobs = [];
 	// ---- launchd ----
 	let plists = [];
@@ -720,7 +750,7 @@ function collectScheduledJobs() {
 		const st = lc.get(label) ?? {};
 		const running = st.pid !== undefined && st.pid !== "" && st.pid !== "-";
 		const exit = st.status !== undefined && /^-?\d+$/.test(st.status) ? parseInt(st.status, 10) : null;
-		// 证据日志: 先查 CRON_EVIDENCE(命令子串匹配,适用于迁到 launchd 的原 cron 任务,
+		// 证据日志: 先查 cron-evidence.json 声明(命令子串匹配,适用于迁到 launchd 的原 cron 任务,
 		// cron.log 仍由脚本自己写,结构化记录比 stdout 重定向精确);
 		// 否则用 plist 的 StandardOutPath
 		const ev = evidenceLogsOfCron(cmdText);
@@ -753,7 +783,8 @@ function collectScheduledJobs() {
 	// ---- cron ----
 	let crontab = null;
 	try {
-		crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", maxBuffer: 1024 * 1024 });
+		// stderr ignore: 无 crontab 时 macOS 会向 stderr 打 "no crontab for xxx",避免刷屏
+		crontab = execFileSync("crontab", ["-l"], { encoding: "utf8", maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
 	} catch {}
 	if (crontab) {
 		const commentBuf = [];

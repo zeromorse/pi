@@ -1,0 +1,36 @@
+[
+	{
+		"match": "ccmp_cost_inspect.sh",
+		"logs": ["~/.ccmp/logs/scheduler.log"]
+	},
+	{
+		"match": "run_agent.sh doctor",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=doctor"
+	},
+	{
+		"match": "run_agent.sh engineer",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=engineer"
+	},
+	{
+		"match": "run_agent.sh scout",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=scout"
+	},
+	{
+		"match": "run_agent.sh curator",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=curator"
+	},
+	{
+		"match": "run_agent.sh critic",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=critic"
+	},
+	{
+		"match": "run_agent.sh planner",
+		"logs": ["~/catpaw-desk-workspace/frontier-radar/logs/agents/cron.log"],
+		"filter": "agent=planner"
+	}
+]

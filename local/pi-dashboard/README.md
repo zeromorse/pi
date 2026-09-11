@@ -6,7 +6,7 @@
 
 多 pi 进程全局看板(扫描 `~/.pi/agent/sessions` 会话文件,监控各进程运行/等待状态)。watch 模式默认不发系统通知,加 `--notify` 可开启会话完成/出错/卡死推送(默认关闭)。进程↔会话配对:第 0 轮读 `~/.pi/agent/runtime/<pid>.json` 注册表精确配对(见 `pid-registry.ts`),注册缺失回退 mtime/创建时间启发式。用法:`node local/pi-dashboard/pi-dashboard.mjs [-w] [--all] [--notify]`。
 
-定时任务视图(watch 按 `c` / `--cron`):自动发现 pi 相关的 launchd LaunchAgent 与 crontab 条目(判定:命令行含独立 pi 词,或命令行中任一 .sh 脚本的内容调 pi,覆盖 `/bin/zsh xxx.sh arg` 包装形态),展示调度/上次运行/上次结果(launchd 用 `launchctl list` 退出码 + 日志交叉验证——exit 0 但日志无记录视为"未运行过"而非 ok,cron 解析日志尾部最后时间戳窗口的 `ERROR`/`exit=[1-9]`);`r` 二次确认后 `launchctl kickstart` 立即执行 launchd 任务,`Enter` 看日志尾部;单次模式末尾自动追加摘要。命令行无重定向或共享日志的任务(如 ccmp 巡检、frontier-radar 的 cron.log)需在脚本内 `CRON_EVIDENCE` 里声明证据日志(可带 `filter` 子串按任务过滤行;launchd 与 cron 来源通用,frontier-radar 从 cron 迁到 launchd 后依旧生效),结果 60s 缓存。
+定时任务视图(watch 按 `c` / `--cron`):自动发现 pi 相关的 launchd LaunchAgent 与 crontab 条目(判定:命令行含独立 pi 词,或命令行中任一 .sh 脚本的内容调 pi,覆盖 `/bin/zsh xxx.sh arg` 包装形态),展示调度/上次运行/上次结果(launchd 用 `launchctl list` 退出码 + 日志交叉验证——exit 0 但日志无记录视为"未运行过"而非 ok,cron 解析日志尾部最后时间戳窗口的 `ERROR`/`exit=[1-9]`);`r` 二次确认后 `launchctl kickstart` 立即执行 launchd 任务,`Enter` 看日志尾部;单次模式末尾自动追加摘要。命令行无重定向或共享日志的任务(如 ccmp 巡检、frontier-radar 的 cron.log)需在同目录 `cron-evidence.json` 中声明证据日志(`[{"match": 命令子串, "logs": [日志路径(~ 展开)], "filter": 可选,按任务过滤行的子串}]`;launchd 与 cron 来源通用,frontier-radar 从 cron 迁到 launchd 后依旧生效;随 60s 缓存重读,watch 模式改配置无需重启),结果 60s 缓存。
 
 ## pid-registry.ts
 
