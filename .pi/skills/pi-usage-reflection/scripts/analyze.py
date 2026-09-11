@@ -342,6 +342,22 @@ def main():
     print(f"active_time≈{fmt_secs(grand['active_seconds'])} edit_calls={grand['edit_calls']} "
           f"git_commits={grand['git_commits']} verification_runs={grand['verification_runs']} "
           f"correction_signals={grand['correction_signals']}")
+
+    # daily averages over the window; days without sessions still count in the
+    # denominator, so the average reflects usage intensity per calendar day
+    if daily:
+        if scan_all:
+            span = ((datetime.strptime(max(daily), "%Y-%m-%d")
+                     - datetime.strptime(min(daily), "%Y-%m-%d")).days + 1)
+        else:
+            span = days
+    else:
+        span = days
+    print(f"daily_avg over {span}d: sessions={grand['sessions'] / span:.1f} "
+          f"user_msgs={grand['user_msgs'] / span:.1f} "
+          f"assistant_msgs={grand['assistant_msgs'] / span:.1f} "
+          f"tool_calls={grand['tool_calls'] / span:.1f} "
+          f"active≈{fmt_secs(grand['active_seconds'] / span)}")
     if grand["dangerous_cmds"]:
         print(f"dangerous_cmds total: {len(grand['dangerous_cmds'])} (samples: {grand['dangerous_cmds'][:5]})")
     if grand["models"]:

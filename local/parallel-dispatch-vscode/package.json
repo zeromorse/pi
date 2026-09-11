@@ -2,7 +2,7 @@
 	"name": "parallel-dispatch",
 	"displayName": "Parallel Dispatch",
 	"description": "Launch pi parallel-dispatch child sessions in terminal tabs. Reads .pi/dispatch.json in the workspace root.",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"publisher": "duanyanlong",
 	"engines": {
 		"vscode": "^1.85.0"
