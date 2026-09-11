@@ -10,6 +10,7 @@
 - Added `/new <name>`, `/fork <name>`, and `/clone <name>` to name the new session directly; also supported via RPC `new_session` and `clone` commands' `name` fields and the extension/SDK `newSession()` and `fork()` `name` options.
 - Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
 - Added tree entry preview: open a full-detail page for the selected entry in the `/tree` view with `Shift+P`, showing markdown-rendered message text, thinking blocks, highlighted tool call arguments (resolved from the originating assistant message for tool results), tool results, bash commands and output, and summaries, with keyboard scrolling, mouse-wheel scrolling, mouse-drag highlight, and `Ctrl+X` to copy the selection or the whole entry.
+- Added per-model `reserveTokens` and `keepRecentTokens` settings through `compaction.modelOverrides`, with ordinary compaction settings as fallback ([#8133](https://github.com/earendil-works/pi-mono/issues/8133)).
 
 ### Changed
 
