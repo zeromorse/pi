@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed fullscreen clipboard failures hiding actionable backend error messages behind a generic notice, and extended failure notices to five seconds ([#9618](https://github.com/earendil-works/pi/issues/9618)).
+
 ### Added
 
 - Added `mouse` overlay option: overlays can request SGR mouse tracking so the mouse wheel reaches their `handleInput` while shown, with tracking disabled again on hide and re-asserted after a suspend/resume cycle. Added `onPlaced` overlay option reporting the resolved screen position each render so mouse-driven overlays can map screen coordinates to content.
