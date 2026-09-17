@@ -9,6 +9,7 @@
 | 组件 | 说明 | 文档 |
 |---|---|---|
 | `blog-sync-local/` | 博文同步本地 skill(远程文章存档为 Markdown,英文转英中对照) | [SKILL.md](blog-sync-local/SKILL.md) |
+| `btw-extension/` | /btw 侧问扩展(agent 忙碌时独立 LLM 回答,不进会话历史;替代原 core 实现,免除 upstream 合并冲突) | [README.md](btw-extension/README.md) |
 | `caffeinebar/` | macOS 菜单栏防休眠开关(原生 Swift) | [README.md](caffeinebar/README.md) |
 | `parallel-dispatch/` | 并行分发工作流 skill(tmux/VSCode/清单三路线) | [SKILL.md](parallel-dispatch/SKILL.md) |
 | `parallel-dispatch-vscode/` | 并行分发 VSCode 扩展(一键分发子 session) | [README.md](parallel-dispatch-vscode/README.md) |
