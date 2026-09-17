@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `user_bash` now fails closed: errors or invalid defined results abort the command without invoking later handlers or executing locally. Return `undefined` to continue propagation; otherwise return `{ operations }` or `{ result }` ([#9068](https://github.com/earendil-works/pi/issues/9068)).
+
 ### Added
 
 - Added `defaultFlashProvider` and `defaultFlashModel` settings (global or project scope; project overrides global) and a `/flash` command that toggles between the default model and the flash model before running a task. The `/model` selector marks the flash model with a `· default-flash` badge (model rows and provider rows) and sorts it after the default model.
@@ -11,6 +15,7 @@
 - Added tree entry timestamps: toggle per-entry record times in the `/tree` view with `Shift+D`.
 - Added tree entry preview: open a full-detail page for the selected entry in the `/tree` view with `Shift+P`, showing markdown-rendered message text, thinking blocks, highlighted tool call arguments (resolved from the originating assistant message for tool results), tool results, bash commands and output, and summaries, with keyboard scrolling, mouse-wheel scrolling, mouse-drag highlight, and `Ctrl+X` to copy the selection or the whole entry.
 - Added per-model `reserveTokens` and `keepRecentTokens` settings through `compaction.modelOverrides`, with ordinary compaction settings as fallback ([#8133](https://github.com/earendil-works/pi-mono/issues/8133)).
+- Added `compat.allowedFallbackModels` configuration for overriding or disabling Anthropic server-side fallback models ([#9294](https://github.com/earendil-works/pi/issues/9294)).
 
 ### Changed
 
@@ -26,6 +31,7 @@
 - Capped agent-level retry backoff at `retry.maxAgentDelayMs` (60s by default) so long retry runs stay responsive during prolonged transient outages ([#8826](https://github.com/earendil-works/pi/issues/8826)).
 - Fixed extension tools without parameter schemas to be rejected during registration instead of breaking provider requests ([#9300](https://github.com/earendil-works/pi/issues/9300)).
 - Fixed local clipboard failures reporting success when the terminal ignored the fallback OSC 52 write, and added platform-specific setup guidance when no clipboard backend works ([#9618](https://github.com/earendil-works/pi/issues/9618)).
+- Fixed `before_agent_start` handlers returning `systemPrompt` (and `forceSystemPrompt`) on models with mid-conversation system messages: the forced prompt is now persisted as a replacing system message and sent as the provider's leading system prompt instead of being appended as a section patch after the original prompt.
 
 ## [0.85.1] - 2026-09-05
 
