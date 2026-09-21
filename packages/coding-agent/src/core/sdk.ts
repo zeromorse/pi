@@ -1,16 +1,12 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-	clampThinkingLevel,
-	type Message,
-	type Model,
-	type SimpleStreamOptions,
-	streamSimple,
-} from "@earendil-works/pi-ai/compat";
+import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
+import { CacheWarmer } from "./cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
@@ -308,23 +304,60 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
-
-	// Extension hooks for provider payloads/responses. Attached to the Agent so the
-	// main loop invokes them, and used as streamFn defaults so standalone requests
-	// that bypass the agent loop (compaction and branch-summary summarization) still
-	// run `before_provider_request` / `after_provider_response` extension handlers.
-	const onPayload: SimpleStreamOptions["onPayload"] = async (payload, _model) => {
+	const cacheWarmer = new CacheWarmer(
+		modelRuntime,
+		sessionManager,
+		() => settingsManager.getCacheWarmingMode(),
+		async (event) => extensionRunnerRef.current?.emitCacheWarmingDecision(event) ?? event.action,
+	);
+	const buildRequestOptions = (
+		requestModel: Model<any>,
+		options: ModelsSimpleStreamOptions = {},
+	): ModelsSimpleStreamOptions => {
+		const providerRetrySettings = settingsManager.getProviderRetrySettings();
+		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
+		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
+		const headerRunner = extensionRunnerRef.current;
+		return {
+			...options,
+			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
+			websocketConnectTimeoutMs: options.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs(),
+			maxRetries: options.maxRetries ?? providerRetrySettings.maxRetries,
+			maxRetryDelayMs: options.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+			transformHeaders: async (requestHeaders) => {
+				const headers = mergeProviderAttributionHeaders(
+					requestModel,
+					settingsManager,
+					options.sessionId,
+					requestHeaders,
+				);
+				return headerRunner?.hasHandlers("before_provider_headers")
+					? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+					: (headers ?? {});
+			},
+		};
+	};
+	const cacheContextIsCurrent = (requestModel: Model<any>) => {
+		const messages = agent.state.messages;
+		return () => {
+			const currentModel = agent.state.model;
+			const currentMessages = agent.state.messages;
+			return (
+				currentModel.provider === requestModel.provider &&
+				currentModel.id === requestModel.id &&
+				messages.length <= currentMessages.length &&
+				messages.every((message, index) => currentMessages[index] === message)
+			);
+		};
+	};
+	const transformProviderPayload = async (payload: unknown) => {
 		const runner = extensionRunnerRef.current;
-		if (!runner?.hasHandlers("before_provider_request")) {
-			return payload;
-		}
+		if (!runner?.hasHandlers("before_provider_request")) return payload;
 		return runner.emitBeforeProviderRequest(payload);
 	};
-	const onResponse: SimpleStreamOptions["onResponse"] = async (response, _model) => {
+	const handleProviderResponse: NonNullable<ModelsSimpleStreamOptions["onResponse"]> = async (response) => {
 		const runner = extensionRunnerRef.current;
-		if (!runner?.hasHandlers("after_provider_response")) {
-			return;
-		}
+		if (!runner?.hasHandlers("after_provider_response")) return;
 		await runner.emit({
 			type: "after_provider_response",
 			status: response.status,
@@ -341,38 +374,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
-			const providerRetrySettings = settingsManager.getProviderRetrySettings();
-			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
-			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
-			// Use max int32 to effectively disable the timeout.
-			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
-			const websocketConnectTimeoutMs =
-				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
-			const headerRunner = extensionRunnerRef.current;
+			const requestOptions = buildRequestOptions(model, options);
+			// Compaction and summaries use their own routing ids; only session requests
+			// replace the cache entry, so warming restarts from them. Keep warming while
+			// the current transcript still extends the request's prefix. Agent state may
+			// shallow-copy the messages array or refresh the model object without changing
+			// the provider request, so top-level object identity is not a valid cache key.
+			if (options?.sessionId === sessionManager.getSessionId()) {
+				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
+			}
+			// Standalone requests that bypass the agent loop (compaction and
+			// branch-summary summarization) do not carry the Agent's onPayload/
+			// onResponse, so the stream function injects the provider hooks itself;
+			// explicit options still win to avoid running hooks twice.
 			return modelRuntime.streamSimple(model, context, {
-				...options,
-				timeoutMs,
-				websocketConnectTimeoutMs,
-				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
-				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				onPayload: options?.onPayload ?? onPayload,
-				onResponse: options?.onResponse ?? onResponse,
-				transformHeaders: async (requestHeaders) => {
-					const headers = mergeProviderAttributionHeaders(
-						model,
-						settingsManager,
-						options?.sessionId,
-						requestHeaders,
-					);
-					return headerRunner?.hasHandlers("before_provider_headers")
-						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
-						: (headers ?? {});
-				},
+				...requestOptions,
+				onPayload: requestOptions.onPayload ?? transformProviderPayload,
+				onResponse: requestOptions.onResponse ?? handleProviderResponse,
 			});
 		},
-		onPayload,
-		onResponse,
+		onPayload: transformProviderPayload,
+		onResponse: handleProviderResponse,
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
@@ -409,12 +431,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resourceLoader,
 		customTools: options.customTools,
 		modelRuntime,
+		cacheWarmer,
 		initialActiveToolNames,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});
+
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

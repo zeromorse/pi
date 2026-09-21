@@ -16,6 +16,7 @@ import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
 	type Model,
+	normalizeContext,
 	type SimpleStreamOptions,
 	type Usage,
 } from "@earendil-works/pi-ai";
@@ -157,7 +158,9 @@ describe("createAgentSession extension hooks on standalone requests", () => {
 	it("runs before_provider_request for direct streamFunction calls without options.onPayload", async () => {
 		const { session } = await createSession();
 
-		const stream = await session.agent.streamFunction(model, { messages: [] }, { sessionId: session.sessionId });
+		const stream = await session.agent.streamFunction(model, normalizeContext({ messages: [] }), {
+			sessionId: session.sessionId,
+		});
 		await stream.result();
 		session.dispose();
 
@@ -171,17 +174,13 @@ describe("createAgentSession extension hooks on standalone requests", () => {
 		const { session } = await createSession();
 
 		const explicitPayloads: unknown[] = [];
-		const stream = await session.agent.streamFunction(
-			model,
-			{ messages: [] },
-			{
-				sessionId: session.sessionId,
-				onPayload: (payload) => {
-					explicitPayloads.push(payload);
-					return payload;
-				},
+		const stream = await session.agent.streamFunction(model, normalizeContext({ messages: [] }), {
+			sessionId: session.sessionId,
+			onPayload: (payload) => {
+				explicitPayloads.push(payload);
+				return payload;
 			},
-		);
+		});
 		await stream.result();
 		session.dispose();
 
