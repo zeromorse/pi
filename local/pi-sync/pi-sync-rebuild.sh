@@ -6,13 +6,17 @@
 #   fast-forward main, mirror it to fork/main, merge main into my-main,
 #   push both branches. CHANGELOG conflicts are auto-resolved by
 #   pi-sync-merge-changelog.py (upstream verbatim + fork entries back under
-#   [Unreleased]); any other conflict aborts the merge for manual handling.
-# - pi-rebuild-global: when my-main advanced, refresh node_modules from the
-#   merged lockfile (upstream dep bumps leave it stale) and rebuild dist/
-#   with Node 22 so the globally linked `pi` command picks up the changes.
+#   [Unreleased]); rerere-applied resolutions are accepted; remaining code
+#   conflicts are delegated to pi-sync-ai-resolve.sh (headless pi + check +
+#   tests verification), and only fall back to abort + notify on failure.
+# - pi-rebuild-global: when my-main advanced or the last build is stale,
+#   refresh node_modules from the merged lockfile (upstream dep bumps leave
+#   it stale) and rebuild dist/ with Node 22 so the globally linked `pi`
+#   command picks up the changes.
 #
 # Scheduled daily at 10:00 by ~/Library/LaunchAgents/com.zeromorse.pi-sync.plist.
 # Log: ~/Library/Logs/pi-sync.log
+# Escape hatch: PI_SYNC_NO_AI=1 disables AI conflict resolution.
 
 set -uo pipefail
 
@@ -125,6 +129,7 @@ fi
 # --- 6. merge main into my-main
 git checkout my-main || die "git checkout my-main failed"
 old_head="$(git rev-parse HEAD)"
+ai_merged=0
 if ! git merge main --no-edit; then
     # rerere may have auto-applied recorded resolutions into the working tree
     # while the index still reports the paths as unmerged; accept those.
@@ -159,8 +164,22 @@ if ! git merge main --no-edit; then
         esac
     done < <(git diff --name-only --diff-filter=U -z)
     if [ -n "$code_conflicts" ]; then
-        git merge --abort
-        die "code conflicts need manual merge:$code_conflicts"
+        # Code conflicts: let pi (headless) try first; PI_SYNC_NO_AI=1 skips it.
+        # On failure fall back to the original behavior: abort + notify. The
+        # reset fallback only triggers when the AI committed despite the prompt
+        # (merge --abort then fails); preflight guaranteed a clean tree at the
+        # old head, so this discards only the AI's own work.
+        if [ "${PI_SYNC_NO_AI:-}" = "1" ]; then
+            git merge --abort 2>/dev/null || git reset --hard "$old_head"
+            die "code conflicts need manual merge (AI resolution disabled):$code_conflicts"
+        fi
+        if "$SCRIPT_DIR/pi-sync-ai-resolve.sh"; then
+            log "AI resolved code conflicts:$code_conflicts"
+            ai_merged=1
+        else
+            git merge --abort 2>/dev/null || git reset --hard "$old_head"
+            die "code conflicts need manual merge (AI resolution failed):$code_conflicts"
+        fi
     fi
     git commit --no-edit || { git merge --abort; die "commit after conflict resolution failed"; }
 fi
@@ -189,7 +208,9 @@ if [ "$old_head" != "$new_head" ] || [ "$(last_built)" != "$new_head" ]; then
     if npm run build && "$PI_BIN" --version; then
         log "rebuild OK"
         mkdir -p "$STATE_DIR" && echo "$new_head" > "$LAST_BUILT_FILE"
-        notify "pi synced to $(git rev-parse --short "$new_head") and rebuilt"
+        ai_note=""
+        [ "$ai_merged" = "1" ] && ai_note=" (AI-resolved merge)"
+        notify "pi synced to $(git rev-parse --short "$new_head") and rebuilt$ai_note"
     else
         die "npm run build failed, run pi-rebuild-global manually"
     fi
