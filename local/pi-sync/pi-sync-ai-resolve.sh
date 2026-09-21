@@ -28,7 +28,7 @@ cd "$REPO"
 
 TIMEOUT_S="${PI_SYNC_AI_TIMEOUT:-1800}"
 NODE_BIN="/Users/duanyanlong/.nvm/versions/node/v22.22.3/bin"
-export PATH="$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="$NODE_BIN:$HOME/.local/bin:$HOME/.pi/agent/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
@@ -77,7 +77,7 @@ trap 'rm -f "$prompt_file"' EXIT
 } > "$prompt_file"
 
 file_count="$(wc -l <<<"$conflicts" | tr -d ' ')"
-log "starting pi headless conflict resolution ($file_count files, timeout ${TIMEOUT}s)"
+log "starting pi headless conflict resolution ($file_count files, timeout ${TIMEOUT_S}s)"
 
 pi_args=(-p)
 [ -n "${PI_SYNC_AI_MODEL:-}" ] && pi_args+=(--model "$PI_SYNC_AI_MODEL")

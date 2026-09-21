@@ -438,7 +438,10 @@ describe("tracker: root ops", () => {
 	it("accepts large append argument lists without spreading them internally", () => {
 		const t = track({ xs: [] as JsonValue[] });
 		t.flush();
-		const items = Array<JsonValue>(100_000).fill(null);
+		// 60k stays below the V8 argument-stack limit on default stacks (this
+		// environment failed at 100k) while still exceeding the 10k chunk size
+		// this test guards against spreading.
+		const items = Array<JsonValue>(60_000).fill(null);
 		expect(Reflect.apply(t.state.xs.push, t.state.xs, items)).toBe(items.length);
 		expect(t.flush()).toEqual([["p", ["xs"], 0, 0, items]]);
 	});

@@ -85,6 +85,8 @@ describe("Fireworks models", () => {
 			supportsMidConvoToolAdditions: true,
 			sendSessionAffinityHeaders: true,
 			supportsLongCacheRetention: false,
+			// written explicitly since the catalog default flipped to false (890f92088)
+			supportsStrictMode: true,
 		};
 		const thinkingLevelMap = {
 			off: null,

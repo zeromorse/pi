@@ -35,7 +35,7 @@ TMP_DIR="$(mktemp -d /tmp/pi-sync.XXXXXX)"
 STATE_DIR="$HOME/Library/Application Support/com.zeromorse.pi-sync"
 LAST_BUILT_FILE="$STATE_DIR/last-built"
 
-export PATH="$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="$NODE_BIN:$HOME/.local/bin:$HOME/.pi/agent/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export GIT_TERMINAL_PROMPT=0
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
