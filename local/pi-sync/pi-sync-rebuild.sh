@@ -25,11 +25,18 @@ PI_NOTIFY="$HOME/Applications/pi-notify.app/Contents/MacOS/pi-notify"
 LOG_FILE="$HOME/Library/Logs/pi-sync.log"
 LOCK_DIR="/tmp/pi-sync.lock"
 TMP_DIR="$(mktemp -d /tmp/pi-sync.XXXXXX)"
+# Records the my-main commit of the last successful rebuild, so a run after a
+# manual merge (or a previously failed build) still rebuilds instead of
+# exiting "up to date" with a stale global pi binary.
+STATE_DIR="$HOME/Library/Application Support/com.zeromorse.pi-sync"
+LAST_BUILT_FILE="$STATE_DIR/last-built"
 
 export PATH="$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export GIT_TERMINAL_PROMPT=0
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+last_built() { cat "$LAST_BUILT_FILE" 2>/dev/null || true; }
 
 notify() {
     if [ -x "$PI_NOTIFY" ]; then
@@ -85,7 +92,7 @@ log "start branch: ${start_branch:-<detached>}"
 # --- 2. fetch upstream
 git fetch origin main || die "git fetch origin main failed (network?)"
 
-# --- 3. nothing to do when main is current and my-main contains it
+# --- 3. nothing to do when main is current, my-main contains it, and it is built
 if [ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] \
     && git merge-base --is-ancestor main my-main; then
     # local my-main commits (e.g. manual fixes) still need mirroring even
@@ -95,8 +102,13 @@ if [ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] \
         git push fork my-main \
             || log "WARNING: git push fork my-main failed, will retry next run"
     fi
-    log "up to date, nothing to do"
-    exit 0
+    if [ "$(last_built)" = "$(git rev-parse my-main)" ]; then
+        log "up to date, nothing to do"
+        exit 0
+    fi
+    # my-main advanced outside this script (manual merge) or the last build
+    # failed; fall through - steps 4-7 become no-ops and step 8 rebuilds
+    log "my-main not built yet (manual merge or failed build), falling through to rebuild"
 fi
 
 # --- 4. fast-forward local main (stray local commits need manual fix)
@@ -114,9 +126,20 @@ fi
 git checkout my-main || die "git checkout my-main failed"
 old_head="$(git rev-parse HEAD)"
 if ! git merge main --no-edit; then
-    # CHANGELOG conflict pattern from the pi-fork-sync skill: upstream moved
-    # [Unreleased] entries into a released version section while my-main holds
-    # fork-only entries under [Unreleased].
+    # rerere may have auto-applied recorded resolutions into the working tree
+    # while the index still reports the paths as unmerged; accept those.
+    while IFS= read -r -d '' f; do
+        if ! grep -q '^<<<<<<<' "$f" 2>/dev/null; then
+            git add "$f"
+            log "rerere already resolved $f"
+        fi
+    done < <(git diff --name-only --diff-filter=U -z)
+
+    # Split what rerere could not fix: CHANGELOG conflicts are auto-resolved
+    # (upstream verbatim + fork entries back under [Unreleased], the pattern
+    # from the pi-fork-sync skill); code conflicts abort together with the
+    # full list so the notification shows every file that needs attention.
+    code_conflicts=""
     while IFS= read -r -d '' f; do
         case "$f" in
         */CHANGELOG.md | CHANGELOG.md)
@@ -131,11 +154,14 @@ if ! git merge main --no-edit; then
             fi
             ;;
         *)
-            git merge --abort
-            die "non-CHANGELOG conflict in $f, manual merge required"
+            code_conflicts="$code_conflicts $f"
             ;;
         esac
     done < <(git diff --name-only --diff-filter=U -z)
+    if [ -n "$code_conflicts" ]; then
+        git merge --abort
+        die "code conflicts need manual merge:$code_conflicts"
+    fi
     git commit --no-edit || { git merge --abort; die "commit after conflict resolution failed"; }
 fi
 new_head="$(git rev-parse HEAD)"
@@ -146,9 +172,9 @@ if ! git push fork my-main; then
     log "WARNING: git push fork my-main failed, will retry next run"
 fi
 
-# --- 8. rebuild only when the merge advanced my-main
-if [ "$old_head" != "$new_head" ]; then
-    log "my-main advanced, refreshing deps + rebuilding (node $(node --version))"
+# --- 8. rebuild when the merge advanced my-main or the last build is stale
+if [ "$old_head" != "$new_head" ] || [ "$(last_built)" != "$new_head" ]; then
+    log "rebuilding (node $(node --version))"
     # upstream dep bumps leave node_modules stale; align it with the merged
     # lockfile before building (never runs lifecycle scripts)
     npm install --ignore-scripts \
@@ -158,14 +184,17 @@ if [ "$old_head" != "$new_head" ]; then
         git status --porcelain | sed 's/^/    /'
         die "unexpected changes after npm install (lockfile drift?)"
     fi
+    # the packages/ai build step regenerates provider data (models.dev et al);
+    # a missing network source fails the build loudly, retried next run
     if npm run build && "$PI_BIN" --version; then
         log "rebuild OK"
+        mkdir -p "$STATE_DIR" && echo "$new_head" > "$LAST_BUILT_FILE"
         notify "pi synced to $(git rev-parse --short "$new_head") and rebuilt"
     else
         die "npm run build failed, run pi-rebuild-global manually"
     fi
 else
-    log "merge was a no-op, skipping rebuild"
+    log "merge was a no-op and build is current, skipping rebuild"
 fi
 
 # --- 9. restore the branch we started on

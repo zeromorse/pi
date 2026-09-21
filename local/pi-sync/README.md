@@ -4,7 +4,9 @@
 
 ## pi-sync-rebuild.sh
 
-定时 fork 同步+重建:自动化 `.pi/skills/pi-fork-sync.md` 与 `.pi/skills/pi-rebuild-global.md` 两个 skill 的全流程(fetch upstream → main ff → push fork → merge 进 my-main → my-main 有新提交则用 Node 22 重新 `npm run build` 并验证 `pi --version`)。CHANGELOG 合并冲突由 `pi-sync-merge-changelog.py` 按规则自动解决(upstream 版本段原样 + fork 条目回插 `[Unreleased]`);代码冲突则 `git merge --abort` 并发 macOS 通知人工处理;working tree 脏/网络失败安全跳过,push 失败下次重试。
+定时 fork 同步+重建:自动化 `.pi/skills/pi-fork-sync.md` 与 `.pi/skills/pi-rebuild-global.md` 两个 skill 的全流程(fetch upstream → main ff → push fork → merge 进 my-main → my-main 有新提交或上次构建落后则用 Node 22 重新 `npm run build` 并验证 `pi --version`)。CHANGELOG 合并冲突由 `pi-sync-merge-changelog.py` 按规则自动解决(upstream 版本段原样 + fork 条目回插 `[Unreleased]`);rerere 已自动应用解法的文件直接采纳;代码冲突则 `git merge --abort` 并发 macOS 通知(含完整冲突文件清单)人工处理;working tree 脏/网络失败安全跳过,push 失败下次重试。
+
+构建状态记录在 `~/Library/Application Support/com.zeromorse.pi-sync/last-built`(最后一次成功 rebuild 的 my-main commit):手动解冲突后 my-main 领先于已构建版本时,脚本会补跑 rebuild 而不是误判"无事可做";build 失败不写状态,次日重试。
 
 - 日志:`~/Library/Logs/pi-sync.log`
 - 调度:LaunchAgent `~/Library/LaunchAgents/com.zeromorse.pi-sync.plist`(每天 10:00,睡眠错过唤醒后补跑)
