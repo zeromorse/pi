@@ -79,14 +79,13 @@ describe("Fireworks models", () => {
 		const compat = {
 			supportsStore: false,
 			supportsDeveloperRole: false,
+			supportsStrictMode: true,
 			requiresReasoningContentOnAssistantMessages: true,
 			thinkingFormat: "openai",
 			supportsMidConvoSystemMessages: true,
 			supportsMidConvoToolAdditions: true,
 			sendSessionAffinityHeaders: true,
 			supportsLongCacheRetention: false,
-			// written explicitly since the catalog default flipped to false (890f92088)
-			supportsStrictMode: true,
 		};
 		const thinkingLevelMap = {
 			off: null,
