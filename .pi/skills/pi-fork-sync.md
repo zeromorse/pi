@@ -1,6 +1,6 @@
 ---
 name: pi-fork-sync
-description: Sync the zeromorse/pi fork with upstream earendil-works/pi, merge main into my-main, and push both branches. Covers remote layout, fast-forward rules, CHANGELOG merge conflicts, and the PAT workflow-scope push failure.
+description: Sync the zeromorse/pi fork with upstream earendil-works/pi, merge main into my-main, and push both branches. Covers remote layout, fast-forward rules, the launchd pi-sync automation that resolves conflicts headlessly, CHANGELOG and docs-refactor merge conflict patterns, and the PAT workflow-scope push failure.
 ---
 
 # Sync pi Fork and Merge main into my-main
@@ -20,7 +20,27 @@ git status --short          # must be clean before switching branches
 git remote -v               # confirm origin=upstream, fork=personal
 ```
 
-If the working tree is dirty, stop and ask the user; never stash or reset.
+If the working tree is dirty, do not immediately assume it is manual work to finish. Check whether the daily pi-sync automation is mid-run first (next section); if it is not, stop and ask the user; never stash or reset.
+
+### Detect an in-flight pi-sync automation (never race it)
+
+The launchd pi-sync job resolves merge conflicts itself:
+
+- `local/pi-sync/pi-sync-merge-changelog.py` auto-resolves CHANGELOG conflicts.
+- `local/pi-sync/pi-sync-ai-resolve.sh` delegates remaining code conflicts to a headless `pi -p` (30 min timeout). The headless run resolves and `git add`s files but never commits; the script then verifies (HEAD unchanged, no unmerged paths, no conflict markers, `npm run check`, `./test.sh`) and the caller commits on success or aborts the merge on failure.
+
+Before touching a dirty tree or a mid-merge state:
+
+```bash
+ps aux | grep 'pi-sync-ai-resolve' | grep -v grep
+tail ~/Library/Logs/pi-sync.log     # look for "starting pi headless conflict resolution"
+```
+
+If the automation is running:
+
+- Do NOT edit conflicted files and do NOT run git commands that touch the index; a second writer corrupts the headless run's work.
+- Monitor via `tail -f ~/Library/Logs/pi-sync.log`. The headless session trace is the newest jsonl under `~/.pi/agent/sessions/--Users-duanyanlong-agent-pi--/` whose timestamp matches the merge start (log line `starting pi headless conflict resolution (N files, ...)`).
+- Signs another agent is mid-resolution: files still `UU` but their conflict markers are already gone, or their content matches neither `git show :2:<file>` (ours) nor `:3:<file>` (theirs). Treat that as "in progress", not "resolved but forgotten to add" — the headless run stages files in bulk at the end.
 
 ## 2. Update local main (fast-forward only)
 
@@ -45,12 +65,25 @@ git checkout my-main
 git merge main --no-edit
 ```
 
+The daily pi-sync job runs this same merge and resolves conflicts automatically (CHANGELOGs via the merge-changelog script, code conflicts via the headless AI resolver, plus rerere preimage reuse). The conflict patterns below are for a manual merge run — and for auditing what the automation should have produced.
+
 ### CHANGELOG conflict pattern
 
 Upstream releases move old `[Unreleased]` entries into a version section (e.g. `## [0.84.3]`), while `my-main` has its own entries under `[Unreleased]`. Both files `packages/*/CHANGELOG.md` then conflict. Resolution rule:
 
 - Take the upstream (main) side verbatim for the released section.
 - Re-add the fork-only entries under `## [Unreleased]` at the top of the file (they are unpublished; released sections are immutable).
+
+### Upstream docs refactor conflict pattern
+
+Upstream occasionally rewrites the docs wholesale (e.g. #9898 split `rpc.md` into `rpc.md` + `rpc-commands.md` + `rpc-extension-ui.md`, and rewrote settings/usage/sessions/extensions). The conflict shape is lopsided: ours = the old big file carrying fork edits, theirs = a new slim file, with the old content moved into newly created files. Resolution rule:
+
+1. Take theirs for the slimmed file: `git show MERGE_HEAD:<file> > <file>`.
+2. List the fork-only commits that touched the old file: `git log --oneline main..my-main -- <file>`.
+3. Verify each fork-only feature still exists in code (upstream may have absorbed it) before writing docs for it — e.g. the RPC `new_session`/`fork`/`clone` `name` parameter is still `name?: string` in `packages/coding-agent/src/modes/rpc/rpc-types.ts`.
+4. Migrate the surviving fork-only semantics into the newly split file by hand — e.g. the `name` parameter docs go into the `new_session`, `fork`, and `clone` sections of `rpc-commands.md`.
+
+Beware the near-miss: a `git show MERGE_HEAD:... >` overwrite while the headless resolver is also working on that file is a write-write race. Only do manual resolution when the automation check above says nothing is running.
 
 After editing, verify no conflict markers remain, then:
 
