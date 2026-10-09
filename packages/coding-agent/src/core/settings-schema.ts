@@ -211,8 +211,7 @@ export const SettingsSchema = Type.Object(
 		defaultModel: Type.Optional(Type.String()),
 		defaultFlashProvider: Type.Optional(
 			Type.String({
-				description:
-				"Provider id of the flash model toggled to by /flash; project scope overrides global.",
+				description: "Provider id of the flash model toggled to by /flash; project scope overrides global.",
 			}),
 		),
 		defaultFlashModel: Type.Optional(

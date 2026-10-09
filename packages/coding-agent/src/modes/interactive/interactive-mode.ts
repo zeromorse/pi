@@ -5273,7 +5273,6 @@ export class InteractiveMode {
 			this.updateEditorBorderColor();
 			this.showStatus(statusMessage);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-			this.checkDaxnutsEasterEgg(model);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
