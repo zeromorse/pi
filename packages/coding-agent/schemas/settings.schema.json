@@ -17,6 +17,14 @@
     "defaultModel": {
       "type": "string"
     },
+    "defaultFlashProvider": {
+      "type": "string",
+      "description": "Provider id of the flash model toggled to by /flash; project scope overrides global."
+    },
+    "defaultFlashModel": {
+      "type": "string",
+      "description": "Model id of the flash model toggled to by /flash; project scope overrides global."
+    },
     "defaultThinkingLevel": {
       "$ref": "#/$defs/ModelThinkingLevel"
     },

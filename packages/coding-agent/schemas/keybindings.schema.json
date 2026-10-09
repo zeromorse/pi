@@ -295,6 +295,14 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Toggle tree label timestamps"
     },
+    "app.tree.toggleEntryTimestamp": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Toggle tree entry timestamps"
+    },
+    "app.tree.togglePreview": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Toggle tree entry preview"
+    },
     "app.session.togglePath": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Toggle session path display"
