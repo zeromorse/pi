@@ -45,7 +45,7 @@ Prefer these components over rebuilding selection, scrolling, text editing, or w
 
 Use `matchesKey()` and `Key` for terminal keyboard input. The parser accounts for supported terminal protocols and key modifiers. Extension components should use the injected `KeybindingsManager` for configurable application actions.
 
-A component that displays a text cursor should implement `Focusable` and place `CURSOR_MARKER` immediately before its visual cursor. The TUI uses that marker to position the hardware cursor for input method editors.
+A component that displays a text cursor should implement `Focusable` and place `CURSOR_MARKER` immediately before its visual cursor. Wrap the cursor cell in `renderFakeCursor()` so the TUI draws it in reverse video, or hides it after `CURSOR_MARKER` when the hardware cursor is shown. The TUI uses the marker to position the hardware cursor for input method editors.
 
 Containers that wrap an `Input` or `Editor` must propagate their `focused` state to that child. Without propagation, Chinese, Japanese, Korean, and other IME candidate windows can appear at the wrong screen position.
 
@@ -78,6 +78,24 @@ See [`overlay-qa-tests.ts`](../examples/extensions/overlay-qa-tests.ts) for posi
 ## Apply themes correctly
 
 Use the theme passed to the extension or component callback. Theme helpers produce ANSI-styled strings for semantic colors such as accent, muted text, success, warnings, errors, tool output, and Markdown.
+
+Use `theme.style()` to combine foreground and background colors with text attributes:
+
+```typescript
+return new Text(
+  theme.style("Done!", {
+    fg: "success",
+    bg: "toolSuccessBg",
+    bold: true,
+  }),
+  0,
+  0,
+);
+```
+
+A style color can be a semantic theme token or a concrete `Color`. Foreground tokens are accepted as `fg` and background tokens as `bg`; to use a token's color in the other position, pass its concrete color, for example `{ fg: theme.colors.userMessageBg }`. Access concrete colors through `theme.colors` and use utilities such as `mixColors()` from `@earendil-works/pi-tui` when color math is needed. Tokens that a theme sets to the terminal default render with the terminal's own color; `theme.colors` reports the color the terminal announced for them, or a guess when it did not. Use `theme.appearance` (`"dark"` or `"light"`) to decide, for example, whether to lighten or darken a color. Pi converts the result to truecolor or 256-color output based on terminal capabilities. Theme tokens are converted once per theme; compute concrete colors outside the render path when possible.
+
+The existing `theme.fg()` and `theme.bg()` helpers remain available for applying one semantic color.
 
 Do not permanently store strings with theme colors unless `invalidate()` rebuilds them. A theme change clears render caches, but it cannot remove old ANSI colors embedded in application state.
 
