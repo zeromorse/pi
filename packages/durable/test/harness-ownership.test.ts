@@ -16,7 +16,6 @@ import {
 	LiveDoc,
 	MemoryStorage,
 	type Storage,
-	StorageRejected,
 	type Submission,
 	type TaskId,
 } from "@earendil-works/pi-durable";
@@ -24,7 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { chatSetup, openChat } from "./chat-support.ts";
 import { addTask, addTool } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { ControlledStorage, context } from "./session-support.ts";
 import { aborted, type Deferred, deferred, openTasks, settled } from "./task-support.ts";
 
 /** Outcome a held task commits once its gate opens. */
@@ -519,7 +518,7 @@ describe("ownership", () => {
 		await harness.close(context);
 	});
 
-	it("retries marks found through an edge loaded after reopen when their commit is rejected", async () => {
+	it("applies marks found through an edge loaded after reopen once a failed cascade commit is reopened", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-durable-ownership-"));
 		directories.add(directory);
 		const path = join(directory, "session.sqlite");
@@ -538,7 +537,7 @@ describe("ownership", () => {
 				writes.some((write) => write.type === "task" && write.value.id === rejectMark && write.value.abortRequested)
 			) {
 				rejectMark = undefined;
-				throw new StorageRejected("rejected once");
+				throw new Error("disk gone");
 			}
 			return commit(writes, ctx);
 		};
@@ -549,42 +548,46 @@ describe("ownership", () => {
 			rejectMark = id;
 			return id;
 		}, context);
-		await waitUntil(async () => rejectMark === undefined);
-		// Any later commit, here the reservation of the new task, retries the cascade.
-		expect((await opened.harness.waitForTask(late, context)).state.outcome.status).toBe("aborted");
+		// The failed cascade commit fails the Harness. `closed` settles once its invocations have ended, and the owner's
+		// abort handler ignores its signal: let it return.
 		open("abort.owner", "completed");
+		expect(await opened.harness.closed).toMatchObject({ reason: "failed" });
+		await opened.harness.close(context);
+		// Reopening derives the mark again.
+		opened = await openHarness(await openNodeSqliteStorage(path));
+		expect((await opened.harness.waitForTask(late, context)).state.outcome.status).toBe("aborted");
 		await opened.harness.close(context);
 	});
 
-	it("retries a cascade whose commit the Storage rejected", async () => {
-		let rejectMark: TaskId | undefined;
-		class Rejecting extends MemoryStorage {
+	it("fails the Harness on a failed cascade commit, and reopening applies the cascade", async () => {
+		const failure = new Error("disk gone");
+		let failMark: TaskId | undefined;
+		class Failing extends ControlledStorage {
 			override async commit(
 				writes: Parameters<MemoryStorage["commit"]>[0],
 				ctx: Parameters<MemoryStorage["commit"]>[1],
 			) {
 				const marks = writes.some(
-					(write) => write.type === "task" && write.value.id === rejectMark && write.value.abortRequested,
+					(write) => write.type === "task" && write.value.id === failMark && write.value.abortRequested,
 				);
 				if (marks) {
-					rejectMark = undefined;
-					throw new StorageRejected("rejected once");
+					failMark = undefined;
+					throw failure;
 				}
 				return super.commit(writes, ctx);
 			}
 		}
-		const { harness, root, reports } = await openHarness(new Rejecting());
+		const storage = new Failing();
+		const { harness, root, reports } = await openHarness(storage);
 		const tree = await ownedChild(root, "owner");
-		rejectMark = tree.inner;
+		failMark = tree.inner;
 		open("owner", "failed");
-		await waitUntil(async () => reports.some((error) => error instanceof StorageRejected));
-		expect((await status(harness, tree.owner)).status).toBe("completing");
-		expect((await status(harness, tree.inner)).status).not.toBe("terminal");
-		// The next commit retries the cascade.
-		await root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context);
-		expect((await harness.waitForTask(tree.inner, context)).state.outcome.status).toBe("aborted");
-		expect((await harness.waitForTask(tree.owner, context)).state.outcome.status).toBe("failed");
+		expect(await harness.closed).toEqual({ reason: "failed", error: failure });
+		expect(reports).toEqual([failure]);
 		await harness.close(context);
+		const reopened = await openHarness(storage.reopen());
+		expect((await reopened.harness.waitForTask(tree.inner, context)).state.outcome.status).toBe("aborted");
+		await reopened.harness.close(context);
 	});
 });
 
@@ -613,7 +616,7 @@ describe("owned conversations from tools and supervisors", () => {
 						callContext,
 					);
 					const settled = await submission.wait(callContext);
-					return { content: [{ type: "text", text: settled.status }] };
+					return { output: [{ type: "text", text: settled.status }] };
 				},
 			}),
 		);
@@ -719,7 +722,7 @@ describe("owned conversations from tools and supervisors", () => {
 						callContext,
 					);
 					try {
-						return { content: [{ type: "text", text: (await submission.wait(callContext)).status }] };
+						return { output: [{ type: "text", text: (await submission.wait(callContext)).status }] };
 					} catch (error) {
 						toolWait.resolve((error as Error).message);
 						throw error;
@@ -768,7 +771,7 @@ describe("owned conversations from tools and supervisors", () => {
 					await childRun.reached;
 					await handle.abort(callContext);
 					const settledChild = await submission.wait(callContext);
-					return { content: [{ type: "text", text: `child ${settledChild.status}` }] };
+					return { output: [{ type: "text", text: `child ${settledChild.status}` }] };
 				},
 			}),
 		);
@@ -867,7 +870,7 @@ describe("owned conversations from tools and supervisors", () => {
 					const request = { type: "input", content: "child task", requestId: `subagent:${api.taskId}` } as const;
 					const submission = await (await api.conversation(child, callContext))!.submit(request, callContext);
 					const settled = await submission.wait(callContext);
-					return { content: [{ type: "text", text: settled.status }] };
+					return { output: [{ type: "text", text: settled.status }] };
 				},
 			}),
 		);

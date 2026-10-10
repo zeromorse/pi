@@ -62,7 +62,7 @@ function gated(message: AssistantMessage): { step: FauxResponseStep; reached: Pr
 }
 
 /** Register a `hold` tool whose calls wait for `gate` and then return `result`. */
-function holdTool(setup: ChatSetup, gate: Deferred, result: ToolExecutionResult = { content: [] }): void {
+function holdTool(setup: ChatSetup, gate: Deferred, result: ToolExecutionResult = { output: [] }): void {
 	addTool(
 		setup.registry,
 		defineTool({
@@ -346,7 +346,7 @@ describe("inbox", () => {
 		const setup = chatSetup();
 		const gate = deferred();
 		gate.resolve();
-		holdTool(setup, gate, { content: [], control: { handoff: "continue here" } });
+		holdTool(setup, gate, { output: [], control: { handoff: "continue here" } });
 		setup.faux.setResponses([HOLD]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const settled = await (await root.submit({ type: "input", content: "a" }, context)).wait(context);
@@ -604,7 +604,7 @@ describe("inbox", () => {
 	it("starts a queued follow-up after a terminating round", async () => {
 		const setup = chatSetup();
 		const gate = deferred();
-		holdTool(setup, gate, { content: [], control: { terminate: true } });
+		holdTool(setup, gate, { output: [], control: { terminate: true } });
 		setup.faux.setResponses([HOLD, answer("follow-up")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const input = await root.submit({ type: "input", content: "a" }, context);
@@ -628,7 +628,7 @@ describe("inbox", () => {
 		const setup = chatSetup();
 		const firstGate = deferred();
 		const secondGate = deferred();
-		holdTool(setup, firstGate, { content: [], control: { handoff: "one" } });
+		holdTool(setup, firstGate, { output: [], control: { handoff: "one" } });
 		addTool(
 			setup.registry,
 			defineTool({
@@ -637,7 +637,7 @@ describe("inbox", () => {
 				parameters: Type.Object({}),
 				execute: async () => {
 					await secondGate.promise;
-					return { content: [], control: { handoff: "two" } };
+					return { output: [], control: { handoff: "two" } };
 				},
 			}),
 		);
@@ -782,7 +782,7 @@ describe("usage", () => {
 		};
 		const gate = deferred();
 		gate.resolve();
-		holdTool(setup, gate, { content: [], usage: spent });
+		holdTool(setup, gate, { output: [], usage: spent });
 		setup.faux.setResponses([HOLD, answer("done"), answer("other")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		await (await root.submit({ type: "input", content: "a" }, context)).wait(context);

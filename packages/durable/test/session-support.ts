@@ -66,6 +66,12 @@ export class ControlledStorage extends MemoryStorage {
 		this.#commitFailure = error;
 	}
 
+	/** Reopen after `close()`, as a fresh process would reopen the same database, keeping every committed record. */
+	reopen(): this {
+		(this as unknown as { closed: boolean }).closed = false;
+		return this;
+	}
+
 	#release(kind: "commit" | "find", held: { gate: Deferred }): void {
 		if (kind === "commit" && this.#commitGate === held) this.#commitGate = undefined;
 		if (kind === "find" && this.#findGate === held) this.#findGate = undefined;

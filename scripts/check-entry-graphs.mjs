@@ -46,8 +46,15 @@ const BUDGETS = {
 			// Tool argument validation reaches TypeBox; provider-session creation reaches pi-ai's lean UUID utility; the
 			// memory and SQLite storages share scan order and cursor handling.
 			maxFiles: 63,
-			forbid: ["packages/ai/src/index.ts", "packages/ai/src/utils/typebox-helpers.ts"],
+			forbid: [
+				"packages/ai/src/index.ts",
+				"packages/ai/src/utils/typebox-helpers.ts",
+				// Photon (WebAssembly) loads only through `./images`.
+				"packages/durable/src/images/",
+			],
 		},
+		// The file tools reach their environment helpers and the Harness definitions they need, not the Harness itself.
+		"./tools": { maxFiles: 17, forbid: ["packages/durable/src/images/"] },
 	},
 };
 

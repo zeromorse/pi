@@ -1,9 +1,12 @@
-import { type Context, copyJson, type JsonValue } from "@earendil-works/chord";
+import { type Context, copyJson, type Draft, type JsonRepresentation, type JsonValue } from "@earendil-works/chord";
 import { awaitWithContext } from "@earendil-works/chord/context";
 import { overlap } from "@earendil-works/chord/delta";
 import type { ImageContent, TextContent, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
+import { Compile } from "typebox/compile";
+import { defineDoc, defineDocFamily } from "../documents.ts";
 import { AssistantEntry, ToolResultEntry } from "../entries.ts";
+import { errorMessage } from "../errors.ts";
 import { defineTask } from "../tasks.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, utf8ByteLength } from "../truncate.ts";
 import type {
@@ -13,55 +16,115 @@ import type {
 	Task,
 	TaskId,
 	TaskOptions,
+	TaskOutcome,
 	TaskRuntime,
 	Tx,
 	TypedEntry,
 } from "../types.ts";
 import { assignJson } from "./json.ts";
-import { clearProgress, finishSlot, LiveDoc, type ToolSlot, toolSlot } from "./live.ts";
+import {
+	clearProgress,
+	finishSlot,
+	LiveDoc,
+	type NestedToolSlot,
+	type NestedToolSummary,
+	removeNestedSlots,
+	type ToolSlot,
+	toolSlot,
+} from "./live.ts";
 import { boundOutput, OutputBuffer, type OutputLimits, PROGRESS_BYTES_PER_SECOND, Progress } from "./output.ts";
 import type {
+	NestedToolExecutionResult,
 	ToolControl,
 	ToolDiagnostic,
 	ToolExecutionApi,
 	ToolExecutionResult,
+	ToolHookCall,
 	ToolHooks,
 	ToolRegistration,
 } from "./types.ts";
 import { recordUsage } from "./usage.ts";
 
-export type ToolTaskInput = { assistant: EntryId; callId: string };
+/**
+ * A model-issued call, read from its assistant entry, or a nested call a running tool made through `executeTool()`,
+ * whose call the input carries because no entry holds it.
+ */
+export type ToolTaskInput =
+	| { kind: "model"; assistant: EntryId; callId: string }
+	| {
+			kind: "nested";
+			parent: TaskId;
+			parentCallId: string;
+			key: string;
+			call: ToolCall;
+			/** `false`: commit no running output, details, or diagnostics to the slot; the result still gets them. */
+			progress?: false;
+	  };
 
 export type ToolTaskCheckpoint =
 	| { phase: "call" }
 	/** Durable intent: the final arguments and the replay policy recorded before execution. */
 	| { phase: "execute"; arguments: JsonObject; replay: "safe" | "unsafe" };
 
-export type ToolTaskResult = { entryId: EntryId; control?: ToolControl };
+/**
+ * A model-issued call's result is its transcript entry; a nested call's result is in its caller's
+ * `NestedResultDoc`, so the receipt stays small and the result retires with the caller. A version 1 task that was
+ * already holding its outcome as `completing` when the Harness upgraded finishes with a version 1 result,
+ * `{ entryId, control? }` without `kind`; treat a result without `kind` as a model-issued call's.
+ */
+export type ToolTaskResult = { kind: "model"; entryId: EntryId; control?: ToolControl } | { kind: "nested" };
+
+/** Index of a call's nested calls by key, so a rerun of the call finds the nested calls it already made. */
+const NestedCallsDoc = defineDoc<{ calls: Record<string, TaskId<ToolTaskResult>> }>({
+	kind: "pi.tool.nested",
+	version: 1,
+	scope: "task",
+	initial: () => ({ calls: {} }),
+});
+
+/**
+ * The result of one nested call, exactly as `executeTool()` returns it, a member of its caller's family keyed by the
+ * nested task ID. Written in the nested call's terminal commit; one document per result, so no write rewrites other
+ * results. Retires with the caller.
+ */
+export const NestedResultDoc = defineDocFamily<{ result: JsonRepresentation<NestedToolExecutionResult> }, JsonObject>({
+	kind: "pi.tool.nested-result",
+	version: 1,
+	scope: "task",
+	family: true,
+	initial: (seed) => seed as { result: JsonRepresentation<NestedToolExecutionResult> },
+});
 
 type Runtime = TaskRuntime<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, ToolHooks>;
 type Content = (TextContent | ImageContent)[];
 
 /**
  * Built-in tool task: resolves the called tool among its phase agent's tools, validates, runs `beforeTool`, records intent,
- * executes, runs `afterTool`, and appends the result, all in one `call` handler so nothing separates resolution from
- * settlement. `execute` is reached only by recovery and applies the replay rule.
+ * executes, runs `afterTool`, and settles the result, all in one `call` handler so nothing separates resolution from
+ * settlement. `execute` is reached only by recovery and applies the replay rule. A model-issued call settles by
+ * appending its result entry; a nested call by writing its result to its caller's `NestedResultDoc`.
  */
 export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, ToolHooks>({
 	name: "pi.tool",
-	version: 1,
+	version: 2,
 	initial: () => ({ phase: "call" }),
+	// Version 1 had only model-issued calls.
+	migrate: (input, checkpoint) => ({
+		input: { kind: "model", ...(input as { assistant: EntryId; callId: string }) },
+		checkpoint: checkpoint as ToolTaskCheckpoint,
+	}),
 	phases: {
 		call: async (task, runtime, context) => {
 			const call = await readCall(runtime, task.input, context);
-			const tool = (await runtime.agent(context)).tools.find((each) => each.name === call.name);
+			const tool = await resolveTool(runtime, task.input, call.name, context);
 			if (tool === undefined) {
 				const error = harnessError("tool_unavailable", `Tool ${call.name} is not available`);
-				return settle(runtime, call, COMPLETED, () => error, context);
+				return settle(runtime, task.input, call, COMPLETED, () => error, context);
 			}
 			const prepared = prepare(tool, call.arguments as JsonObject);
 			const checked = "error" in prepared ? prepared : validate(tool, call, prepared.args);
-			if ("error" in checked) return settle(runtime, call, COMPLETED, () => invalid(checked.error), context);
+			if ("error" in checked)
+				return settle(runtime, task.input, call, COMPLETED, () => invalid(checked.error), context);
 			let args = checked.args;
 			let block: string | undefined;
 			await runtime.hooks.each("beforeTool", async (hook) => {
@@ -72,29 +135,35 @@ export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskRe
 					else if (decision?.arguments !== undefined) args = decision.arguments;
 				} catch (error) {
 					if (runtime.signal.aborted) throw error;
-					block = errorText(error);
+					block = errorMessage(error);
 				}
 			});
 			if (block !== undefined) {
 				const blocked = harnessError("blocked", `Tool call blocked: ${block}`);
-				return settle(runtime, call, COMPLETED, () => blocked, context);
+				return settle(runtime, task.input, call, COMPLETED, () => blocked, context);
 			}
 			const validated = validate(tool, call, args);
-			if ("error" in validated) return settle(runtime, call, COMPLETED, () => invalid(validated.error), context);
-			const final = validated.args;
+			if ("error" in validated)
+				return settle(runtime, task.input, call, COMPLETED, () => invalid(validated.error), context);
+			// Strict JSON: repair may set optional properties to undefined, which the slot and checkpoint cannot hold.
+			const final = copyJson(validated.args, { omitUndefinedProperties: true }) as JsonObject;
 			await runtime.commit(async (tx) => {
 				const slot = toolSlot(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId);
 				if (slot !== undefined) slot.status = "running";
+				// A nested slot shows the arguments the call runs with, which repair, hooks, and coercion may have changed.
+				// Compared with the input, which the slot got at admission: reading the draft would track every leaf.
+				const changed = task.input.kind === "nested" && !jsonEqual(task.input.call.arguments as JsonValue, final);
+				if (changed && slot !== undefined && "parentTaskId" in slot) slot.arguments = final;
 				const intent = { phase: "execute", arguments: final, replay: tool.replay ?? "unsafe" } as const;
 				return { status: "running", checkpoint: intent };
 			}, context);
-			await run(runtime, call, tool, final, context);
+			await run(runtime, task.input, call, tool, final, context);
 		},
 		/** Recovery after intent: rerun only when the stored and the current policy both say `safe`. */
 		execute: async (task, runtime, context) => {
 			const { arguments: args, replay } = task.state.checkpoint;
 			const call = await readCall(runtime, task.input, context);
-			const tool = (await runtime.agent(context)).tools.find((each) => each.name === call.name);
+			const tool = await resolveTool(runtime, task.input, call.name, context);
 			if (replay === "safe" && tool?.replay === "safe") {
 				// The rerun reports from scratch; clear what the interrupted attempt published.
 				await runtime.commit(async (tx) => {
@@ -102,23 +171,42 @@ export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskRe
 					if (slot !== undefined) clearProgress(slot);
 					return undefined;
 				}, context);
-				return run(runtime, call, tool, args, context);
+				return run(runtime, task.input, call, tool, args, context);
 			}
 			const message = `Tool ${call.name} was interrupted and may have partially run`;
 			// `failed` records cancellation intent, so the call's owned conversations, left unsupervised, are aborted.
 			const ending = { status: "failed", message } as const;
-			await settle(runtime, call, ending, (slot) => fromSlot(slot, "interrupted", message), context);
+			await settle(runtime, task.input, call, ending, (slot) => fromSlot(slot, "interrupted", message), context);
 		},
 	},
 	abort: async (task, runtime, context) => {
 		const call = await readCall(runtime, task.input, context);
-		const message = `Tool ${call.name} was aborted`;
-		await settle(runtime, call, { status: "aborted" }, (slot) => fromSlot(slot, "aborted", message), context);
+		// Abandoned after a restart (`TaskOptions.abandonOnRestart`): say whether the call may have run.
+		const [code, message] =
+			task.abortReason !== "restart"
+				? ["aborted", `Tool ${call.name} was aborted`]
+				: task.state.checkpoint.phase === "execute"
+					? ["interrupted", `Tool ${call.name} was interrupted by a restart and may have partially run`]
+					: ["abandoned", `Tool ${call.name} was not started: its caller ended with a restart`];
+		const ending = { status: "aborted" } as const;
+		await settle(runtime, task.input, call, ending, (slot) => fromSlot(slot, code, message), context);
 	},
 });
 
-/** The tool call `callId` of the assistant entry. */
-async function readCall(runtime: Runtime, input: ToolTaskInput, context: Context): Promise<ToolCall> {
+/** The called tool: among the tools the model is offered for a model-issued call, else among those tools may call. */
+async function resolveTool(
+	runtime: Runtime,
+	input: ToolTaskInput,
+	name: string,
+	context: Context,
+): Promise<ToolRegistration | undefined> {
+	const agent = await runtime.agent(context);
+	return (input.kind === "model" ? agent.tools : agent.callable).find((tool) => tool.name === name);
+}
+
+/** The call: from the input for a nested call, which hooks see with its parent, else from the assistant entry. */
+async function readCall(runtime: Runtime, input: ToolTaskInput, context: Context): Promise<ToolHookCall> {
+	if (input.kind === "nested") return { ...input.call, parent: { taskId: input.parent, callId: input.parentCallId } };
 	const entry = await runtime.entry(AssistantEntry, input.assistant, context);
 	const message = entry?.model?.[0];
 	const call =
@@ -140,7 +228,7 @@ function prepare(tool: ToolRegistration, args: JsonObject): Checked {
 	try {
 		return { args: tool.prepareArguments(args) as JsonObject };
 	} catch (error) {
-		return { error: errorText(error) };
+		return { error: errorMessage(error) };
 	}
 }
 
@@ -149,7 +237,7 @@ function validate(tool: ToolRegistration, call: ToolCall, args: JsonObject): Che
 	try {
 		return { args: validateToolArguments(tool, { ...call, arguments: args }) as JsonObject };
 	} catch (error) {
-		return { error: errorText(error) };
+		return { error: errorMessage(error) };
 	}
 }
 
@@ -168,7 +256,8 @@ type Reported = {
 /** Execute with the resolved implementation, then settle its result. */
 async function run(
 	runtime: Runtime,
-	call: ToolCall,
+	input: ToolTaskInput,
+	call: ToolHookCall,
 	tool: ToolRegistration,
 	args: JsonObject,
 	context: Context,
@@ -179,7 +268,15 @@ async function run(
 		retain: tool.outputLimits?.retain ?? "head",
 	};
 	const reported: Reported = { output: new OutputBuffer(limits), limits, diagnostics: [], details: undefined };
-	const progress = publishProgress(runtime, reported, context);
+	const streams = input.kind === "model" || input.progress !== false;
+	const progress = publishProgress(runtime, reported, streams, context);
+	/** Nested call admissions this invocation started; cleanup waits for them, so it sees every nested call. */
+	const admissions: Promise<unknown>[] = [];
+	// A caller that can rerun reattaches to its nested calls and child tasks after a restart; any other caller never
+	// resumes, so they are abandoned (`TaskOptions.abandonOnRestart`).
+	const resumes = tool.replay === "safe";
+	/** Default keys: the order of this invocation's calls, so a rerun that calls in the same order reattaches. */
+	let sequence = 0;
 	let ended = false;
 	const assertLive = (): void => {
 		if (ended) throw new Error(`Tool call ${call.id} has settled`);
@@ -204,6 +301,11 @@ async function run(
 						bytesPerSecond: PROGRESS_BYTES_PER_SECOND,
 					}
 				: undefined,
+		retainedOutput: () => {
+			assertLive();
+			const retained = reported.output.snapshot();
+			return { text: retained.text, truncated: retained.droppedBytes > 0 };
+		},
 		diagnostic: (diagnostic) => {
 			assertLive();
 			reported.diagnostics.push(copyJson(diagnostic, { omitUndefinedProperties: true }) as ToolDiagnostic);
@@ -233,9 +335,10 @@ async function run(
 			options: Omit<TaskOptions, "conversationId">,
 			taskContext: Context,
 		): Promise<TaskId<R>> => {
+			const child = options.ownership.kind === "task" && !resumes ? { abandonOnRestart: true, ...options } : options;
 			let id: TaskId<R> | undefined;
 			await runtime.commit(async (tx) => {
-				id = await tx.createTask(task, input, options);
+				id = await tx.createTask(task, input, child);
 				return undefined;
 			}, taskContext);
 			return id!;
@@ -246,6 +349,27 @@ async function run(
 		snapshot: runtime.snapshot,
 		snapshotAsOf: runtime.snapshotAsOf,
 		watchDoc: runtime.watchDoc,
+		executeTool: async (name, toolArgs, callContext, options = {}) => {
+			assertLive();
+			const key = options.key ?? String(++sequence);
+			if (options.key !== undefined) checkKey(options.key);
+			const admission = startNestedCall(
+				runtime,
+				call.id,
+				name,
+				toolArgs,
+				{ key, progress: options.progress, abandonOnRestart: !resumes },
+				callContext,
+			);
+			admissions.push(admission);
+			const id = await admission;
+			const settled = await runtime.waitForTask(id, callContext);
+			const stored = await runtime.snapshot(NestedResultDoc, runtime.taskId, String(id), callContext);
+			// A copy the tool may change; a nested call the scheduler faulted or orphaned stored none.
+			return stored === undefined
+				? fallbackResult(id, name, settled.state.outcome)
+				: (copyJson(stored.result as unknown as JsonValue) as unknown as NestedToolExecutionResult);
+		},
 	};
 
 	let result: ToolExecutionResult;
@@ -267,18 +391,20 @@ async function run(
 			for (const waiter of await progress.stop()) waiter.reject(error);
 			throw error;
 		}
-		result = { isError: true, diagnostics: [toolDiagnostic("tool_error", errorText(error))] };
-		// A throw, from `execute()` or from building the environment, ends the task `failed`, which cancels what the call owned; it no longer supervises it. The error text
-		// is already in the result entry.
+		result = { isError: true, diagnostics: [toolDiagnostic("tool_error", errorMessage(error))] };
+		// A throw, from `execute()` or from building the environment, ends the task `failed`, which cancels what the call
+		// owned; it no longer supervises it. The error text is already in the result.
 		ending = { status: "failed", message: `Tool ${call.name} threw` };
 	}
 	ended = true;
+	// No admission starts after `ended`; let those underway commit, so settlement aborts and lists their calls.
+	await Promise.allSettled(admissions);
 	reported.output.end();
 	// Details still waiting for a progress commit settle with the terminal commit, the final flush.
 	const pending = await progress.stop();
 	try {
-		const settled = await finalResult(runtime, call, result, reported, context);
-		await settle(runtime, call, ending, () => settled, context, durationMs);
+		const settled = await finalResult(runtime, input, call, tool, result, reported, context);
+		await settle(runtime, input, call, ending, () => settled, context, durationMs);
 	} catch (error) {
 		for (const waiter of pending) waiter.reject(error);
 		throw error;
@@ -287,13 +413,14 @@ async function run(
 }
 
 /**
- * Throttled commits of what the tool reported into its `pi.live.tools` slot, each writing only what changed since the
- * last one.
+ * Throttled commits of what the tool reported into its slot, in `pi.live.tools` or `pi.live.nestedTools`, each writing
+ * only what changed since the last one; none when `enabled` is false.
  */
-function publishProgress(runtime: Runtime, reported: Reported, context: Context): Progress {
+function publishProgress(runtime: Runtime, reported: Reported, enabled: boolean, context: Context): Progress {
 	let written = { text: "", details: undefined as JsonValue | undefined, diagnostics: 0 };
 	return new Progress(
 		async () => {
+			if (!enabled) return 0;
 			// Capture everything synchronously: the tool keeps reporting while the commit is in flight.
 			const snapshot = reported.output.snapshot();
 			const current = { text: snapshot.text, details: reported.details, diagnostics: reported.diagnostics.length };
@@ -341,69 +468,257 @@ function publishProgress(runtime: Runtime, reported: Reported, context: Context)
 
 /**
  * The settled result: the tool's result with the retained output and last details as fallbacks, its diagnostics after
- * those reported through the api, `afterTool` applied, and explicit text bounded, with the Harness's truncation
- * diagnostic last.
+ * those reported through the api, `afterTool` applied, explicit text bounded, and `structuredOutput` checked against the
+ * tool's schema, with the Harness's diagnostics last. A nested call whose `structuredOutput` breaks the contract gets an
+ * error result without it; a model-issued call only loses it, and the break is reported to the host.
  */
 async function finalResult(
 	runtime: Runtime,
-	call: ToolCall,
+	input: ToolTaskInput,
+	call: ToolHookCall,
+	tool: ToolRegistration,
 	result: ToolExecutionResult,
 	reported: Reported,
 	context: Context,
 ): Promise<ToolExecutionResult> {
 	const harness: ToolDiagnostic[] = [];
-	const retained = result.content === undefined ? reported.output.snapshot() : undefined;
-	const content: Content =
-		retained === undefined ? result.content! : retained.text === "" ? [] : [{ type: "text", text: retained.text }];
+	const retained = result.output === undefined ? reported.output.snapshot() : undefined;
+	const output: Content =
+		retained === undefined ? result.output! : retained.text === "" ? [] : [{ type: "text", text: retained.text }];
 	let final: ToolExecutionResult = {
 		...result,
-		content,
+		output,
 		details: result.details === undefined ? reported.details : result.details,
 		diagnostics: [...reported.diagnostics, ...(result.diagnostics ?? [])],
 	};
 	await runtime.hooks.each("afterTool", async (hook) => {
 		final = (await hook(call, final, runtime, context)) ?? final;
 	});
-	// The retained output's truncation applies only while afterTool kept that content.
-	if (retained !== undefined && retained.droppedBytes > 0 && final.content === content) {
+	// The retained output's truncation applies only while afterTool kept that output.
+	if (retained !== undefined && retained.droppedBytes > 0 && final.output === output) {
 		harness.push(truncated(retained, reported.limits.retain));
 	}
-	const bounded = boundContent(final.content ?? [], reported.limits);
+	const bounded = boundContent(final.output ?? [], reported.limits);
 	if (bounded.droppedBytes > 0) harness.push(truncated(bounded, reported.limits.retain));
-	return { ...final, content: bounded.content, diagnostics: [...(final.diagnostics ?? []), ...harness] };
+	const broken = structuredOutputError(tool, final);
+	if (broken !== undefined) {
+		const { structuredOutput: _dropped, ...rest } = final;
+		if (input.kind === "nested") {
+			final = { ...rest, isError: true };
+			harness.push(toolDiagnostic("invalid_structured_output", broken));
+		} else {
+			// The model never sees structured output, so its call stands; the host learns of the broken tool.
+			final = rest;
+			runtime.report(new Error(broken));
+		}
+	}
+	// Without a schema, programs get the output itself; the model reads only `output`, so model-issued calls skip it.
+	if (input.kind === "nested" && tool.structuredOutputSchema === undefined) {
+		final = { ...final, structuredOutput: outputValue(bounded.content) as JsonValue };
+	}
+	return { ...final, output: bounded.content, diagnostics: [...(final.diagnostics ?? []), ...harness] };
+}
+
+const structuredValidators = new WeakMap<object, ReturnType<typeof Compile>>();
+
+/** Why a result's `structuredOutput` breaks the tool's contract, or `undefined` when it keeps it. */
+function structuredOutputError(tool: ToolRegistration, result: ToolExecutionResult): string | undefined {
+	const schema = tool.structuredOutputSchema;
+	const value = result.structuredOutput;
+	if (schema === undefined) {
+		return value === undefined
+			? undefined
+			: `Tool ${tool.name} returned structuredOutput but declares no structuredOutputSchema`;
+	}
+	if (value === undefined) {
+		return result.isError === true ? undefined : `Tool ${tool.name} returned no structuredOutput`;
+	}
+	let validator = structuredValidators.get(schema);
+	if (validator === undefined) {
+		validator = Compile(schema);
+		structuredValidators.set(schema, validator);
+	}
+	if (validator.Check(value)) return undefined;
+	const [first] = validator.Errors(value);
+	const path = first?.instancePath.replace(/^\//, "").replace(/\//g, ".") || "root";
+	return `Tool ${tool.name} returned structuredOutput that does not match its schema: ${path}: ${first?.message ?? "invalid"}`;
 }
 
 /**
- * Commit the tool's terminal state: append its result entry, mark its slot done, and complete or end aborted with the
- * entry ID. `build` receives the slot so interruption and abort can report the durable partial output.
+ * Commit the tool's terminal state and mark its slot done. A model-issued call appends its result entry and ends with
+ * the entry ID; a nested call writes its result to the caller's `NestedResultDoc`, records its usage, and ends with a
+ * small receipt. Nested calls this call left running are aborted first, so they report into their slots before the
+ * slots below the call leave `pi.live`. `build` receives the slot so interruption and abort can report the durable
+ * partial output.
  */
 async function settle(
 	runtime: Runtime,
-	call: ToolCall,
+	input: ToolTaskInput,
+	call: ToolHookCall,
 	ending: Ending,
-	build: (slot: Readonly<ToolSlot> | undefined) => ToolExecutionResult,
+	build: (slot: Readonly<ToolSlot | NestedToolSlot> | undefined) => ToolExecutionResult,
 	context: Context,
 	durationMs?: number,
 ): Promise<void> {
+	// A crash in between leaves the call in `execute`: a safe rerun reattaches to the calls, an interruption ends here.
+	const index = await runtime.snapshot(NestedCallsDoc, runtime.taskId, context);
+	const nestedIds = Object.values(index?.calls ?? {}).sort((a, b) => a - b);
+	// Mark them all before waiting for any: one may run until a sibling is cancelled.
+	await Promise.all(nestedIds.map((id) => runtime.abortOwned(id, context)));
 	await runtime.commit(async (tx) => {
-		const slot = toolSlot(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId);
+		const conversationId = runtime.conversationId;
+		const live = await tx.doc(LiveDoc, conversationId);
+		const slot = toolSlot(live, runtime.taskId);
 		const result = build(slot);
-		const entry = await appendToolResult(tx, runtime.conversationId, call, result, runtime.now(), durationMs);
-		if (slot !== undefined) finishSlot(slot, entry.id);
-		const entryId = entry.id;
-		if (ending.status === "aborted")
-			return { status: "terminal", outcome: { status: "aborted", result: { entryId } } };
+		let settled: ToolTaskResult;
+		if (input.kind === "nested") {
+			const nested = nestedResult(runtime.taskId, result, durationMs);
+			if (nested.usage !== undefined) await recordUsage(tx, conversationId, "tools", call.name, nested.usage);
+			// The caller is never terminal before its owned nested calls; a missing entry is a bug, not a race.
+			if ((await tx.doc(NestedCallsDoc, input.parent)).calls[input.key] !== runtime.taskId) {
+				throw new Error(`Nested call ${call.id} is not in its caller's index`);
+			}
+			const stored = { result: nested as unknown as JsonRepresentation<NestedToolExecutionResult> };
+			await tx.doc(NestedResultDoc, input.parent, String(runtime.taskId), stored);
+			if (slot !== undefined && "parentTaskId" in slot) {
+				finishSlot(slot);
+				slot.summary = summaryOf(nested, result.output ?? []);
+			}
+			settled = { kind: "nested" };
+		} else {
+			const timing = { timestamp: runtime.now(), durationMs };
+			const entry = await appendToolResult(tx, conversationId, call, result, timing);
+			if (slot !== undefined && !("parentTaskId" in slot)) {
+				finishSlot(slot);
+				slot.entry = entry.id;
+			}
+			// Tools build control objects freely; drop keys set to undefined so the task result is strict JSON.
+			const control =
+				result.control === undefined || ending.status !== "completed"
+					? {}
+					: { control: copyJson(result.control as JsonValue, { omitUndefinedProperties: true }) as ToolControl };
+			settled = { kind: "model", entryId: entry.id, ...control };
+		}
+		// A call that made no nested calls has no slots below it; skipping the scan keeps many leaves linear.
+		if (nestedIds.length > 0) removeNestedSlots(live, runtime.taskId);
+		if (ending.status === "aborted") return { status: "terminal", outcome: { status: "aborted", result: settled } };
 		if (ending.status === "failed") {
 			const error = { message: ending.message };
-			return { status: "terminal", outcome: { status: "failed", error, result: { entryId } } };
+			return { status: "terminal", outcome: { status: "failed", error, result: settled } };
 		}
-		// Tools build control objects freely; drop keys set to undefined so the task result is strict JSON.
-		const control =
-			result.control === undefined
-				? {}
-				: { control: copyJson(result.control as JsonValue, { omitUndefinedProperties: true }) as ToolControl };
-		return { status: "terminal", outcome: { status: "completed", result: { entryId, ...control } } };
+		return { status: "terminal", outcome: { status: "completed", result: settled } };
 	}, context);
+}
+
+/**
+ * A nested call's result, as stored and returned: strict JSON, without `output`, which only the model reads, and
+ * without `control`, which only model-issued calls apply.
+ */
+function nestedResult(
+	taskId: TaskId,
+	result: ToolExecutionResult,
+	durationMs: number | undefined,
+): NestedToolExecutionResult {
+	const nested = {
+		taskId,
+		structuredOutput: result.structuredOutput,
+		isError: result.isError ?? false,
+		details: result.details,
+		diagnostics: result.diagnostics ?? [],
+		usage: result.usage,
+		durationMs,
+	};
+	return copyJson(nested as unknown as JsonValue, {
+		omitUndefinedProperties: true,
+	}) as unknown as NestedToolExecutionResult;
+}
+
+/**
+ * Create nested call `key` of the call `parentCallId` in one commit: its tool task, owned by the calling task, its slot,
+ * and its index entry. A key already in the index returns that call's task when it names the same tool and arguments.
+ */
+async function startNestedCall(
+	runtime: Runtime,
+	parentCallId: string,
+	name: string,
+	args: JsonObject,
+	options: { readonly key: string; readonly progress: boolean | undefined; readonly abandonOnRestart: boolean },
+	context: Context,
+): Promise<TaskId<ToolTaskResult>> {
+	const key = options.key;
+	const call: ToolCall = {
+		type: "toolCall",
+		id: `${parentCallId}/${key}`,
+		name,
+		arguments: copyJson(args, { omitUndefinedProperties: true }) as JsonObject,
+	};
+	let id: TaskId<ToolTaskResult> | undefined;
+	await runtime.commit(async (tx) => {
+		const index = await tx.doc(NestedCallsDoc, runtime.taskId);
+		const existing = Object.hasOwn(index.calls, key) ? index.calls[key] : undefined;
+		if (existing !== undefined) {
+			const input = (await tx.task(existing))?.input as ToolTaskInput | undefined;
+			const same =
+				input?.kind === "nested" &&
+				input.parent === runtime.taskId &&
+				input.call.name === name &&
+				jsonEqual(input.call.arguments as JsonValue, call.arguments as JsonValue);
+			if (!same) throw new Error(`Nested call ${call.id} was already made with another tool or other arguments`);
+			id = existing as TaskId<ToolTaskResult>;
+			return undefined;
+		}
+		const input: ToolTaskInput = {
+			kind: "nested",
+			parent: runtime.taskId,
+			parentCallId,
+			key,
+			call,
+			...(options.progress === false ? { progress: false } : {}),
+		};
+		const created = await tx.createTask(ToolTask, input, {
+			ownership: { kind: "task", taskId: runtime.taskId },
+			abandonOnRestart: options.abandonOnRestart,
+		});
+		index.calls[key] = created;
+		const live = await tx.doc(LiveDoc, runtime.conversationId);
+		live.nestedTools ??= [];
+		const slot: NestedToolSlot = {
+			callId: call.id,
+			parentCallId,
+			parentTaskId: runtime.taskId,
+			name,
+			taskId: created,
+			arguments: call.arguments as JsonObject,
+			status: "pending",
+		};
+		live.nestedTools.push(slot as Draft<NestedToolSlot>);
+		id = created;
+		return undefined;
+	}, context);
+	return id!;
+}
+
+/**
+ * What programs get of a tool's output when it declares no schema: one text item as its string, one image as itself,
+ * nothing as `""`, and anything else as the content list.
+ */
+function outputValue(output: Content): string | ImageContent | Content {
+	if (output.length === 0) return "";
+	if (output.length > 1) return output;
+	const [only] = output;
+	return only!.type === "text" ? only!.text : only!;
+}
+
+/** What the caller gets for a nested call without a stored result: one the scheduler faulted or orphaned. */
+function fallbackResult(taskId: TaskId, name: string, outcome: TaskOutcome<ToolTaskResult>): NestedToolExecutionResult {
+	const message =
+		outcome.status === "faulted"
+			? `Tool ${name} failed: ${outcome.error.message}`
+			: outcome.status === "orphaned"
+				? `Tool ${name} could not resume: ${outcome.reason}`
+				: `Tool ${name} ended without a result`;
+	const error = harnessError(outcome.status, message);
+	return { taskId, isError: true, diagnostics: error.diagnostics ?? [] };
 }
 
 /**
@@ -415,13 +730,17 @@ type Ending = { readonly status: "completed" | "aborted" } | { readonly status: 
 const COMPLETED: Ending = { status: "completed" };
 
 /** An error result from the slot's durable partial output, details, and diagnostics. */
-function fromSlot(slot: Readonly<ToolSlot> | undefined, code: string, message: string): ToolExecutionResult {
+function fromSlot(
+	slot: Readonly<ToolSlot | NestedToolSlot> | undefined,
+	code: string,
+	message: string,
+): ToolExecutionResult {
 	const diagnostics = [...(slot?.diagnostics ?? [])];
 	const droppedBytes = slot?.droppedBytes ?? 0;
 	if (droppedBytes > 0) diagnostics.push(truncated({ droppedBytes, droppedLines: slot?.droppedLines ?? 0 }));
 	diagnostics.push(toolDiagnostic(code, message));
 	return {
-		content: slot?.output === undefined || slot.output === "" ? [] : [{ type: "text", text: slot.output }],
+		output: slot?.output === undefined || slot.output === "" ? [] : [{ type: "text", text: slot.output }],
 		isError: true,
 		...(slot?.details === undefined ? {} : { details: slot.details }),
 		diagnostics,
@@ -430,7 +749,7 @@ function fromSlot(slot: Readonly<ToolSlot> | undefined, code: string, message: s
 
 /** An error result the Harness writes itself: no content and one `error` diagnostic with `code`. */
 export function harnessError(code: string, message: string): ToolExecutionResult {
-	return { content: [], isError: true, diagnostics: [toolDiagnostic(code, message)] };
+	return { output: [], isError: true, diagnostics: [toolDiagnostic(code, message)] };
 }
 
 function toolDiagnostic(code: string, message: string): ToolDiagnostic {
@@ -450,6 +769,27 @@ function truncated(
 	};
 }
 
+/** Error text a nested call's summary keeps. */
+const MAX_SUMMARY_ERROR_CHARS = 500;
+
+/** How a nested call ended, for its slot: error text, from its diagnostics or else its `output`, bounded. */
+function summaryOf(result: NestedToolExecutionResult, output: Content): NestedToolSummary {
+	const error = result.isError ? errorTextOf(result, output).slice(0, MAX_SUMMARY_ERROR_CHARS) : "";
+	return {
+		isError: result.isError,
+		...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+		...(result.usage === undefined ? {} : { usage: result.usage }),
+		...(error === "" ? {} : { error }),
+	};
+}
+
+/** The error messages of a nested result, else the text items of its output, joined with newlines. */
+function errorTextOf(result: NestedToolExecutionResult, output: Content): string {
+	const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+	if (errors.length > 0) return errors.map((diagnostic) => diagnostic.message).join("\n");
+	return output.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
+}
+
 /**
  * Append a `pi.tool-result` entry. The content ends with the rendered diagnostics, so the stored message is exactly
  * what the model sees; `data` keeps the structured list. A result's usage is added to `pi.usage` in the same commit.
@@ -459,11 +799,11 @@ export async function appendToolResult(
 	conversationId: ConversationId,
 	call: ToolCall,
 	result: ToolExecutionResult,
-	timestamp: number,
-	durationMs?: number,
+	meta: { readonly timestamp: number; readonly durationMs?: number },
 ): Promise<TypedEntry<{ diagnostics: ToolDiagnostic[] }>> {
+	const { timestamp, durationMs } = meta;
 	const diagnostics = [...(result.diagnostics ?? [])];
-	const content: Content = [...(result.content ?? [])];
+	const content: Content = [...(result.output ?? [])];
 	if (diagnostics.length > 0) content.push({ type: "text", text: renderDiagnostics(diagnostics) });
 	const message = {
 		role: "toolResult",
@@ -504,6 +844,29 @@ function boundContent(
 	return { content: result, droppedBytes: bounded.droppedBytes, droppedLines: bounded.droppedLines };
 }
 
-function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+/**
+ * Explicit nested call keys are path segments of the call ID, so IDs of different nested calls never collide, and are
+ * never plain positive integers, which default keys use. `__proto__` would not land in the index as an own key.
+ */
+function checkKey(key: string): void {
+	if (key === "" || key.includes("/") || key === "__proto__" || /^[1-9][0-9]*$/.test(key)) {
+		throw new Error(
+			`Nested call key ${JSON.stringify(key)} must be non-empty, without "/", not "__proto__", and not a positive integer`,
+		);
+	}
+}
+
+/** Structural JSON equality; object key order does not matter. */
+function jsonEqual(a: JsonValue, b: JsonValue): boolean {
+	if (a === b) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+	if (Array.isArray(a) || Array.isArray(b)) {
+		return (
+			Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, i) => jsonEqual(item, b[i]!))
+		);
+	}
+	const keys = Object.keys(a);
+	return (
+		keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && jsonEqual(a[key]!, b[key]!))
+	);
 }
