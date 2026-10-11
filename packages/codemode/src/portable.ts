@@ -1,17 +1,11 @@
-export {
-	DEFAULT_INPUT_SCHEMA_MAX_CHARS,
-	MCP_TYPESCRIPT_PREAMBLE,
-	mcpStructuredContentSchema,
-	type RenderDeclarationsOptions,
-	renderDeclarations,
-	renderToolOutputType,
-	renderToolSample,
-	renderToolSignature,
-	schemaToType,
-} from "./declarations.ts";
+/**
+ * Sandboxes that need no Node built-ins: `InlineCodemodeSandbox` runs the VM on the calling thread
+ * and `RemoteCodemodeSandbox` runs it in another isolate. Neither imports `node:*` modules, so this
+ * entry works in Cloudflare Workers, Durable Objects, and browsers. `CodemodeSandbox`, which uses
+ * worker threads, stays in the main entry.
+ */
 export { toCodemodeIdentifier } from "./identifier.ts";
 export { CodemodeSandboxBase } from "./runtime/execution.ts";
-export { CodemodeSandbox } from "./runtime/host.ts";
 export {
 	DEFAULT_INTERRUPT_BUDGET,
 	InlineCodemodeSandbox,
@@ -23,6 +17,7 @@ export {
 	MAX_STORE_TOTAL_CHARS,
 	MAX_STORE_VALUE_CHARS,
 } from "./runtime/prelude-source.ts";
+export type { HostToWorkerMessage, VmStartData, WorkerToHostMessage } from "./runtime/protocol.ts";
 export {
 	type CodemodeRemote,
 	type CodemodeRemoteExchange,
@@ -34,14 +29,6 @@ export {
 	type RemoteCodemodeSandboxOptions,
 	serveCodemodeRemote,
 } from "./runtime/remote.ts";
-export {
-	CODEMODE_OPTIONS_PREFIX,
-	CODEMODE_SOURCE_GRAMMAR,
-	CodemodeSourceError,
-	type CodemodeSourceOptions,
-	type ParsedCodemodeSource,
-	parseCodemodeSource,
-} from "./source.ts";
 export type {
 	CodemodeCall,
 	CodemodeCallStatus,
@@ -52,9 +39,8 @@ export type {
 	CodemodeOutputItem,
 	CodemodeResult,
 	CodemodeSandboxBaseOptions,
-	CodemodeSandboxOptions,
 	CodemodeStoreWrites,
 	CodemodeTool,
 	CodemodeToolContext,
 } from "./types.ts";
-export { type CodemodeWasmModule, loadQuickJSWasm } from "./wasm.ts";
+export type { CodemodeWasmModule } from "./wasm.ts";

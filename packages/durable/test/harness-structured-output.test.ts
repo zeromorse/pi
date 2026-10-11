@@ -13,7 +13,8 @@ import {
 import {
 	defineTool,
 	MemoryStorage,
-	NestedResultDoc,
+	NestedCallDoc,
+	type NestedCallState,
 	type NestedToolExecutionResult,
 	type ToolExecutionResult,
 	type ToolRegistration,
@@ -152,17 +153,16 @@ describe("structured output", () => {
 		);
 		setup.faux.setResponses([call("probe"), DONE]);
 		const storage = new MemoryStorage();
-		const stored: JsonValue[] = [];
-		const commit = storage.commit.bind(storage);
-		storage.commit = (writes, commitContext) => {
-			for (const write of writes) {
-				if (write.type === "document.create" && write.record.kind === NestedResultDoc.definition.kind) {
-					stored.push(write.content.value.result!);
-				}
-			}
-			return commit(writes, commitContext);
-		};
 		const { harness, root } = await openChat(storage, setup);
+		// The result each nested call's document got, as committed.
+		const stored: JsonValue[] = [];
+		harness.subscribeCommits((publication) => {
+			for (const change of publication.changes) {
+				if (change.type !== "document" || change.record.kind !== NestedCallDoc.definition.kind) continue;
+				const result = (change.value as NestedCallState | null)?.result;
+				if (result !== undefined && change.ops.length > 0) stored.push(result as unknown as JsonValue);
+			}
+		});
 		const stream = await watchEvents(harness, root.id, context);
 		const ends: NestedToolExecutionResult[] = [];
 		stream.start(async (batch) => {

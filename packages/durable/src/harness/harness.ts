@@ -80,6 +80,9 @@ type ConversationHost<Tool extends ToolRegistration> = {
 	create(target: CreateTarget, options: CreateOptions, context: Context): Promise<Conversation>;
 };
 
+/** Key of the Harness's internal index-size getter, for tests. */
+export const SCHEDULER_INDEX_SIZES = Symbol.for("pi-durable.schedulerIndexSizes");
+
 class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 	readonly id: ConversationId;
 	readonly #host: ConversationHost<Tool>;
@@ -244,6 +247,11 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 		return this.readOnLine(() => this.storage.task(id, context)) as Promise<
 			TaskRecord<JsonValue, JsonValue, R> | undefined
 		>;
+	}
+
+	/** Internal, for tests: sizes of the scheduler's ownership indexes. */
+	get [SCHEDULER_INDEX_SIZES](): TaskScheduler["indexSizes"] {
+		return this.#tasks.indexSizes;
 	}
 
 	inspect(context: Context): Promise<HarnessInspection> {

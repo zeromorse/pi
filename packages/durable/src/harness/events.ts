@@ -16,7 +16,7 @@ import type {
 import { AgentDoc } from "./agent.ts";
 import type { InboxItem, InboxState } from "./inbox.ts";
 import type { CompactionStatus, LiveState, NestedToolSlot, ToolSlot } from "./live.ts";
-import { NestedResultDoc } from "./tool.ts";
+import { NestedCallDoc, type NestedCallState } from "./tool.ts";
 import type { AgentState, CompactionReason, Harness, NestedToolExecutionResult, ToolDiagnostic } from "./types.ts";
 import { UsageDoc, type UsageState } from "./usage.ts";
 import { scanAll } from "./util.ts";
@@ -230,16 +230,18 @@ function translate(
 	const tasks = new Map<TaskId, TaskChange["value"]>();
 	const submissions: SubmissionRecord[] = [];
 	// Nested results this commit stored, by nested task ID; read now, since the caller's documents may retire next.
-	const nestedResults = new Map<string, NestedToolExecutionResult>();
+	const nestedResults = new Map<TaskId, NestedToolExecutionResult>();
 	for (const change of publication.changes) {
 		if (
 			change.type === "document" &&
-			change.record.kind === NestedResultDoc.definition.kind &&
-			change.record.key !== undefined &&
+			change.record.kind === NestedCallDoc.definition.kind &&
 			change.value !== null &&
 			change.conversationId === conversationId
 		) {
-			nestedResults.set(change.record.key, change.value.result as unknown as NestedToolExecutionResult);
+			const state = change.value as NestedCallState;
+			if (state.taskId !== undefined && state.result !== undefined) {
+				nestedResults.set(state.taskId, state.result as unknown as NestedToolExecutionResult);
+			}
 		}
 		if (change.type === "entry" && change.value.conversationId === conversationId) entries.push(change.value);
 		if (change.type === "task" && change.value.conversationId === conversationId)
@@ -324,7 +326,7 @@ function translate(
 	// Nested calls that end in this commit, the same way, children before the calls that made them: the lists hold
 	// parents first, so walk them backwards.
 	const endNested = (slot: NestedToolSlot): void => {
-		const result = nestedResults.get(String(slot.taskId));
+		const result = nestedResults.get(slot.taskId);
 		events.push({ type: "tool_execution_end", ...callOf(slot), ...(result === undefined ? {} : { result }) });
 	};
 	const nestedNow = new Map(nested.map((slot) => [slot.taskId, slot]));

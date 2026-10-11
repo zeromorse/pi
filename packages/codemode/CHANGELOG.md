@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `RemoteCodemodeSandbox`, which runs each script's VM in another isolate while tools run in the caller. `CodemodeSandboxDurableObject` from the new `@earendil-works/pi-codemode/cloudflare` entry is its remote end, deployed as its own Cloudflare Worker. `examples/cloudflare` shows the setup
+- Added `InlineCodemodeSandbox`, which runs the VM on the calling thread for runtimes without worker threads. Its `interruptBudget` limits scripts that compute without awaiting a tool
+- Added the `@earendil-works/pi-codemode/portable` entry, which has no Node imports, and `CodemodeSandboxBase`, the API all three sandboxes share
+
+### Changed
+
+- The VM now polls for interrupts while it drains promise jobs, so a script such as `while (true) await null` is stopped at the same points as a synchronous loop
+
+### Fixed
+
+- Fixed `CodemodeSandbox` failing with a broken bridge error when the host runs under `node --watch` on Node 24 or 26, which posts `watch:import`/`watch:require` messages on the worker channel ([#10725](https://github.com/earendil-works/pi/issues/10725))
+
 ## [1.1.0] - 2026-10-07
 
 ### Added

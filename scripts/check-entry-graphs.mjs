@@ -41,6 +41,20 @@ const BUDGETS = {
 		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
 	},
+	"packages/codemode": {
+		// Node and Bun users never load the Cloudflare entry, which imports the `cloudflare:workers` built-in.
+		".": { maxFiles: 12, forbid: ["codemode/src/cloudflare.ts"] },
+		// Runtimes without Node built-ins (Workers, browsers) import these; neither may reach the worker-thread host
+		// or the file-based wasm loader.
+		"./portable": {
+			maxFiles: 8,
+			forbid: ["codemode/src/index.ts", "runtime/host.ts", "runtime/worker.ts", "codemode/src/wasm.ts"],
+		},
+		"./cloudflare": {
+			maxFiles: 9,
+			forbid: ["codemode/src/index.ts", "runtime/host.ts", "runtime/worker.ts", "codemode/src/wasm.ts"],
+		},
+	},
 	"packages/durable": {
 		".": {
 			// Tool argument validation reaches TypeBox; provider-session creation reaches pi-ai's lean UUID utility; the

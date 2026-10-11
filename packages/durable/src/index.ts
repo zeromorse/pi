@@ -51,7 +51,8 @@ export { ProviderDoc, type ProviderState } from "./harness/provider.ts";
 export { createRegistry } from "./harness/registry.ts";
 export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from "./harness/task-graph.ts";
 export {
-	NestedResultDoc,
+	NestedCallDoc,
+	type NestedCallState,
 	ToolTask,
 	type ToolTaskCheckpoint,
 	type ToolTaskInput,

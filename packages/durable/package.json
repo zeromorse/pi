@@ -107,6 +107,8 @@
 		"bench:tool-output": "node --conditions=source --experimental-strip-types --expose-gc test/tool-output-bench.ts",
 		"bench:nested-tools": "node --conditions=source --experimental-strip-types --expose-gc test/nested-tools-bench.ts",
 		"bench:nested-images": "node --conditions=source --experimental-strip-types --expose-gc test/nested-images-bench.ts",
+		"bench:scheduler-fanout": "node --conditions=source --experimental-strip-types test/scheduler-fanout-bench.ts",
+		"bench:scheduler-memory": "node --conditions=source --experimental-strip-types --expose-gc test/scheduler-memory-bench.ts",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"keywords": [

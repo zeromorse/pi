@@ -47,7 +47,7 @@ export type NestedToolSlot = SlotProgress & {
 	 * once it starts executing. A model-issued call's arguments are in its assistant entry instead.
 	 */
 	arguments: JsonObject;
-	/** Once done: how the call ended, for a status line. The result itself is in the caller's `NestedResultDoc`. */
+	/** Once done: how the call ended, for a status line. The result itself is in the caller's `NestedCallDoc`. */
 	summary?: NestedToolSummary;
 };
 
