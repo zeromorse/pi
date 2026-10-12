@@ -51,6 +51,12 @@ export type ModelRef = {
 
 export type UserInput = UserMessage["content"];
 
+/**
+ * The entry an input is placed as, instead of `pi.user`: an application kind, and data the transcript shows, such as its
+ * author. Its model message is still the input's user message.
+ */
+export type InputEntry = { readonly kind: string; readonly data?: JsonValue };
+
 /** Host submission: user input that may start a run, or a passive entry write. */
 export type SubmissionDraft = {
 	readonly requestId?: string;
@@ -59,7 +65,8 @@ export type SubmissionDraft = {
 			readonly type: "input";
 			readonly content: UserInput;
 			readonly whenBusy?: "steer" | "followUp" | "reject";
-			readonly entry?: never;
+			/** Place the input as this entry; default `pi.user` without data. The kind must not start with `pi.`. */
+			readonly entry?: InputEntry;
 	  }
 	| {
 			readonly type: "write";
@@ -170,10 +177,11 @@ export type NestedToolExecutionResult = {
 	/** The nested call's tool task. */
 	readonly taskId: TaskId;
 	/**
-	 * The value for programs. A tool with `structuredOutputSchema`: its validated `structuredOutput`, absent on an error
-	 * result that has none. A tool without: its bounded output, success or error, as a string for one text item, an
-	 * `ImageContent` for one image, `""` for none, and the content list otherwise. Absent on an error result the Harness
-	 * wrote itself (unavailable, invalid, blocked, interrupted, aborted); `diagnostics` say what went wrong.
+	 * The tool's value for programs. A tool with `structuredOutputSchema`: its validated `structuredOutput`, also on an
+	 * error result that has one; absent otherwise, and an error's text is then in an error diagnostic. A tool without:
+	 * its bounded output, success or error, as a string for one text item, an `ImageContent` for one image, `""` for
+	 * none, and the content list otherwise. Absent on an error result the Harness wrote itself (unavailable, invalid,
+	 * blocked, interrupted, aborted); `diagnostics` say what went wrong.
 	 */
 	readonly structuredOutput?: JsonValue;
 	readonly isError: boolean;
@@ -518,6 +526,12 @@ export type HarnessSettings = {
 	 * Busy conversations always keep it; `0` drops it once the conversation is idle.
 	 */
 	readonly contextRetentionMs?: number;
+	/**
+	 * How long a loaded document that no watch or document state observes stays in memory after its last read or write;
+	 * the next access loads it from Storage. Observed documents always stay. Default ten minutes; `0` drops one right
+	 * after use; `Infinity` keeps them. Anything else that is not a number of milliseconds means the default.
+	 */
+	readonly documentRetentionMs?: number;
 };
 
 /** Resolved settings: every field over its built-in default, object fields merged. */
@@ -532,6 +546,7 @@ export type Settings = {
 	readonly steeringMode: QueueMode;
 	readonly followUpMode: QueueMode;
 	readonly contextRetentionMs: number;
+	readonly documentRetentionMs: number;
 };
 
 /** What `HarnessOptions.env` builds an environment for. */
@@ -615,8 +630,10 @@ export interface Conversation {
 	configure(change: AgentChange, context: Context): Promise<void>;
 
 	/**
-	 * Durably admit user input or a passive entry write. A busy conversation, or one with queued items, queues it in
-	 * `pi.inbox`; `whenBusy: "reject"` rejects with `ConversationBusy` instead and writes nothing.
+	 * Durably admit user input or a passive entry write. A busy conversation, or one with queued items, queues input and
+	 * writes that affect model context in `pi.inbox`; `whenBusy: "reject"` rejects input with `ConversationBusy` instead
+	 * and writes nothing. A write of only `kind` and `data` (no `model`, `head`, or `edits`) is appended at once,
+	 * even mid-run, as it changes nothing the model sees.
 	 */
 	submit(submission: SubmissionDraft, context: Context): Promise<Submission>;
 	/**
