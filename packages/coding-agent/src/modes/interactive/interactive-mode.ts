@@ -234,6 +234,9 @@ function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
+/** Tool output display mode, cycled by the tool expansion keybinding. */
+type ToolOutputDisplay = "expanded" | "collapsed" | "hidden";
+
 class ExpandableText extends ThemedText implements Expandable {
 	private readonly state: { expanded: boolean };
 
@@ -510,8 +513,11 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
-	// Tool output expansion state
-	private toolOutputExpanded = false;
+	// Tool output display state
+	private toolOutputDisplay: ToolOutputDisplay = "collapsed";
+
+	// Intermediate narration (assistant text preceding tool calls) visibility
+	private hideIntermediateNarration = false;
 
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
@@ -664,6 +670,7 @@ export class InteractiveMode {
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
+		this.updateFooterDisplayIndicators();
 
 		// Register themes from resource loader and initialize
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
@@ -1418,7 +1425,7 @@ export class InteractiveMode {
 	}
 
 	private getStartupExpansionState(): boolean {
-		return this.options.verbose || this.toolOutputExpanded;
+		return this.options.verbose || this.toolOutputDisplay === "expanded";
 	}
 
 	/** Startup header (logo, version, key hints). Hidden only by quietStartup: true. */
@@ -2073,6 +2080,7 @@ export class InteractiveMode {
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
+		this.updateFooterDisplayIndicators();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
 		this.ui.setClearOnShrink(clearOnShrink);
@@ -2569,7 +2577,7 @@ export class InteractiveMode {
 			// Create and add custom header
 			this.customHeader = factory(this.ui, theme);
 			if (isExpandable(this.customHeader)) {
-				this.customHeader.setExpanded(this.toolOutputExpanded);
+				this.customHeader.setExpanded(this.toolOutputDisplay === "expanded");
 			}
 			if (index !== -1) {
 				this.headerContainer.children[index] = this.customHeader;
@@ -2581,7 +2589,7 @@ export class InteractiveMode {
 			// Restore built-in header
 			this.customHeader = undefined;
 			if (isExpandable(this.builtInHeader)) {
-				this.builtInHeader.setExpanded(this.toolOutputExpanded);
+				this.builtInHeader.setExpanded(this.toolOutputDisplay === "expanded");
 			}
 			if (index !== -1) {
 				this.headerContainer.children[index] = this.builtInHeader;
@@ -2681,8 +2689,8 @@ export class InteractiveMode {
 				}
 				return result;
 			},
-			getToolsExpanded: () => this.toolOutputExpanded,
-			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
+			getToolsExpanded: () => this.toolOutputDisplay === "expanded",
+			setToolsExpanded: (expanded) => this.setToolOutputDisplay(expanded ? "expanded" : "collapsed"),
 		};
 	}
 
@@ -3109,6 +3117,7 @@ export class InteractiveMode {
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("app.narration.toggle", () => this.toggleIntermediateNarration());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
 		this.defaultEditor.onAction(
@@ -3527,6 +3536,7 @@ export class InteractiveMode {
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
+					this.applyToolOutputDisplay(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
 				}
@@ -3536,6 +3546,7 @@ export class InteractiveMode {
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
+					this.applyToolOutputDisplay(this.streamingComponent);
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -3553,7 +3564,7 @@ export class InteractiveMode {
 									this.ui,
 									this.sessionManager.getCwd(),
 								);
-								component.setExpanded(this.toolOutputExpanded);
+								this.applyToolOutputDisplay(component);
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 							} else {
@@ -3632,7 +3643,7 @@ export class InteractiveMode {
 						this.ui,
 						this.sessionManager.getCwd(),
 					);
-					component.setExpanded(this.toolOutputExpanded);
+					this.applyToolOutputDisplay(component);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
@@ -3872,7 +3883,7 @@ export class InteractiveMode {
 			return;
 		}
 		const component = new CustomEntryComponent(entry, renderer, this.outputPad);
-		component.setExpanded(this.toolOutputExpanded);
+		component.setExpanded(this.toolOutputDisplay === "expanded");
 		if (!component.hasContent()) {
 			return;
 		}
@@ -3918,7 +3929,7 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.outputPad,
 					);
-					component.setExpanded(this.toolOutputExpanded);
+					component.setExpanded(this.toolOutputDisplay === "expanded");
 					this.chatContainer.addChild(component);
 				}
 				break;
@@ -3930,7 +3941,7 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.outputPad,
 				);
-				component.setExpanded(this.toolOutputExpanded);
+				component.setExpanded(this.toolOutputDisplay === "expanded");
 				this.chatContainer.addChild(component);
 				break;
 			}
@@ -3941,7 +3952,7 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.outputPad,
 				);
-				component.setExpanded(this.toolOutputExpanded);
+				component.setExpanded(this.toolOutputDisplay === "expanded");
 				this.chatContainer.addChild(component);
 				break;
 			}
@@ -3961,7 +3972,7 @@ export class InteractiveMode {
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
 						);
-						component.setExpanded(this.toolOutputExpanded);
+						component.setExpanded(this.toolOutputDisplay === "expanded");
 						this.chatContainer.addChild(component);
 						// Render user message separately if present
 						if (skillBlock.userMessage) {
@@ -3998,6 +4009,7 @@ export class InteractiveMode {
 					this.outputPad,
 					this.getMarkdownTransformers(),
 				);
+				this.applyToolOutputDisplay(assistantComponent);
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -4062,7 +4074,7 @@ export class InteractiveMode {
 							this.ui,
 							this.sessionManager.getCwd(),
 						);
-						component.setExpanded(this.toolOutputExpanded);
+						this.applyToolOutputDisplay(component);
 						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -4578,13 +4590,24 @@ export class InteractiveMode {
 	}
 
 	private toggleToolOutputExpansion(): void {
-		this.setToolsExpanded(!this.toolOutputExpanded);
+		const order: readonly ToolOutputDisplay[] = ["collapsed", "hidden", "expanded"];
+		this.setToolOutputDisplay(order[(order.indexOf(this.toolOutputDisplay) + 1) % order.length] ?? "collapsed");
 	}
 
-	private setToolsExpanded(expanded: boolean): void {
-		if (expanded === this.toolOutputExpanded) return;
+	private applyToolOutputDisplay(component: ToolExecutionComponent | AssistantMessageComponent): void {
+		if (component instanceof ToolExecutionComponent) {
+			component.setExpanded(this.toolOutputDisplay === "expanded");
+			component.setHidden(this.toolOutputDisplay === "hidden");
+		} else {
+			component.setHideWithToolCalls(this.hideIntermediateNarration);
+		}
+	}
 
-		this.toolOutputExpanded = expanded;
+	private setToolOutputDisplay(display: ToolOutputDisplay): void {
+		if (display === this.toolOutputDisplay) return;
+
+		this.toolOutputDisplay = display;
+		const expanded = display === "expanded";
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
@@ -4594,9 +4617,32 @@ export class InteractiveMode {
 				if (isExpandable(child)) {
 					child.setExpanded(expanded);
 				}
+				if (child instanceof ToolExecutionComponent) {
+					child.setHidden(display === "hidden");
+				}
 			}
 		}
-		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
+		this.showStatus(`Tool output: ${display}`);
+		this.updateFooterDisplayIndicators();
+	}
+
+	private toggleIntermediateNarration(): void {
+		this.hideIntermediateNarration = !this.hideIntermediateNarration;
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setHideWithToolCalls(this.hideIntermediateNarration);
+			}
+		}
+		this.showStatus(`Narration: ${this.hideIntermediateNarration ? "hidden" : "shown"}`);
+		this.updateFooterDisplayIndicators();
+	}
+
+	private updateFooterDisplayIndicators(): void {
+		this.footer.setDisplayIndicators({
+			tools: this.toolOutputDisplay,
+			narrationHidden: this.hideIntermediateNarration,
+			thinkingHidden: this.hideThinkingBlock,
+		});
 	}
 
 	/** Update rendered assistant messages without rebuilding live tool components. */
@@ -4614,6 +4660,7 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 		this.updateThinkingBlockVisibility();
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
+		this.updateFooterDisplayIndicators();
 	}
 
 	private async handleOpenExternalEditor(): Promise<void> {
@@ -6597,7 +6644,7 @@ export class InteractiveMode {
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
 			if (isExpandable(activeHeader)) {
-				activeHeader.setExpanded(this.toolOutputExpanded);
+				activeHeader.setExpanded(this.toolOutputDisplay === "expanded");
 			}
 			setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 			this.applyRuntimeSettings();
@@ -6954,6 +7001,7 @@ export class InteractiveMode {
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
+		const toggleNarration = this.getAppKeyDisplay("app.narration.toggle");
 		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
@@ -6999,6 +7047,7 @@ export class InteractiveMode {
 | \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
+| \`${toggleNarration}\` | Toggle intermediate narration |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |

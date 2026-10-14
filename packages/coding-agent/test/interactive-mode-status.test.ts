@@ -8,7 +8,9 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -143,28 +145,110 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 	});
 });
 
-describe("InteractiveMode.setToolsExpanded", () => {
+describe("InteractiveMode.setToolOutputDisplay", () => {
+	beforeAll(() => initTheme("dark"));
+
 	test("applies expansion state to the active header and chat entries", () => {
 		const header = { setExpanded: vi.fn() };
 		const loadedResourcesChild = { setExpanded: vi.fn() };
 		const chatChild = { setExpanded: vi.fn() };
 		const fakeThis: any = {
-			toolOutputExpanded: false,
+			toolOutputDisplay: "collapsed",
 			customHeader: undefined,
 			builtInHeader: header,
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
 			ui: { requestRender: vi.fn() },
+			footer: { setDisplayIndicators: vi.fn() },
+			updateFooterDisplayIndicators: (
+				InteractiveMode.prototype as unknown as {
+					updateFooterDisplayIndicators: () => void;
+				}
+			).updateFooterDisplayIndicators,
 			showStatus: vi.fn(),
 		};
 
-		(InteractiveMode as any).prototype.setToolsExpanded.call(fakeThis, true);
+		(InteractiveMode as any).prototype.setToolOutputDisplay.call(fakeThis, "expanded");
 
-		expect(fakeThis.toolOutputExpanded).toBe(true);
+		expect(fakeThis.toolOutputDisplay).toBe("expanded");
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
+	});
+
+	test("hides chat tool execution components when set to hidden", () => {
+		const ui = { requestRender: vi.fn() };
+		const tool = new ToolExecutionComponent("custom_tool", "id", {}, {}, undefined, ui as any, "/");
+		const setHiddenSpy = vi.spyOn(tool, "setHidden");
+		const fakeThis: any = {
+			toolOutputDisplay: "collapsed",
+			customHeader: undefined,
+			builtInHeader: { setExpanded: vi.fn() },
+			loadedResourcesContainer: { children: [] },
+			chatContainer: { children: [tool] },
+			ui,
+			footer: { setDisplayIndicators: vi.fn() },
+			updateFooterDisplayIndicators: (
+				InteractiveMode.prototype as unknown as {
+					updateFooterDisplayIndicators: () => void;
+				}
+			).updateFooterDisplayIndicators,
+			showStatus: vi.fn(),
+		};
+
+		(InteractiveMode as any).prototype.setToolOutputDisplay.call(fakeThis, "hidden");
+
+		expect(fakeThis.toolOutputDisplay).toBe("hidden");
+		expect(setHiddenSpy).toHaveBeenCalledWith(true);
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: hidden");
+	});
+
+	test("toggles intermediate narration visibility independently of tool display", () => {
+		const intermediate = new AssistantMessageComponent({
+			role: "assistant",
+			content: [
+				{ type: "text", text: "narration" },
+				{ type: "toolCall", id: "tool-1", name: "read", arguments: {} },
+			],
+			api: "test",
+			provider: "test",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		});
+		const setHideSpy = vi.spyOn(intermediate, "setHideWithToolCalls");
+		const fakeThis: any = {
+			hideIntermediateNarration: false,
+			chatContainer: { children: [intermediate] },
+			footer: { setDisplayIndicators: vi.fn() },
+			updateFooterDisplayIndicators: (
+				InteractiveMode.prototype as unknown as {
+					updateFooterDisplayIndicators: () => void;
+				}
+			).updateFooterDisplayIndicators,
+			showStatus: vi.fn(),
+		};
+
+		(InteractiveMode as any).prototype.toggleIntermediateNarration.call(fakeThis);
+
+		expect(fakeThis.hideIntermediateNarration).toBe(true);
+		expect(setHideSpy).toHaveBeenCalledWith(true);
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Narration: hidden");
+
+		(InteractiveMode as any).prototype.toggleIntermediateNarration.call(fakeThis);
+
+		expect(fakeThis.hideIntermediateNarration).toBe(false);
+		expect(setHideSpy).toHaveBeenCalledWith(false);
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Narration: shown");
 	});
 });
 
@@ -524,7 +608,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	function createShowLoadedResourcesThis(options: {
 		quietStartup: QuietStartup;
 		verbose?: boolean;
-		toolOutputExpanded?: boolean;
+		toolOutputDisplay?: "expanded" | "collapsed" | "hidden";
 		cwd?: string;
 		contextFiles?: Array<{ path: string; content?: string }>;
 		systemPromptSource?: { path: string };
@@ -536,7 +620,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	}) {
 		const fakeThis: any = {
 			options: { verbose: options.verbose ?? false },
-			toolOutputExpanded: options.toolOutputExpanded ?? false,
+			toolOutputDisplay: options.toolOutputDisplay ?? "collapsed",
 			loadedResourcesContainer: new Container(),
 			chatContainer: new Container(),
 			settingsManager: {
@@ -728,7 +812,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("shows full resource listing when expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
-			toolOutputExpanded: true,
+			toolOutputDisplay: "expanded",
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
@@ -746,7 +830,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: true,
 			verbose: true,
-			toolOutputExpanded: false,
+			toolOutputDisplay: "collapsed",
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
@@ -1141,7 +1225,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("captures mixed extension layouts in expanded output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
-			toolOutputExpanded: true,
+			toolOutputDisplay: "expanded",
 			extensions: createExtensionFixtures(),
 			useRealScopeGroups: true,
 		});
@@ -1211,7 +1295,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const cwd = path.join(home, "Development", "pi-mono");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
-			toolOutputExpanded: true,
+			toolOutputDisplay: "expanded",
 			cwd,
 			contextFiles: [{ path: path.join(home, ".pi", "agent", "AGENTS.md") }, { path: path.join(cwd, "AGENTS.md") }],
 		});

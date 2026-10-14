@@ -55,6 +55,16 @@ interface SessionStats {
 	contextUsage: ContextUsage | undefined;
 }
 
+/** Display-mode indicators shown in the footer when they differ from their default. */
+export interface FooterDisplayIndicators {
+	/** Tool output display mode; "collapsed" is the default and is not shown. */
+	tools: "expanded" | "collapsed" | "hidden";
+	/** Whether intermediate narration is hidden. */
+	narrationHidden: boolean;
+	/** Whether thinking blocks are hidden. */
+	thinkingHidden: boolean;
+}
+
 /**
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
@@ -64,6 +74,11 @@ export class FooterComponent implements Component {
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private sessionStats?: SessionStats;
+	private displayIndicators: FooterDisplayIndicators = {
+		tools: "collapsed",
+		narrationHidden: false,
+		thinkingHidden: false,
+	};
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -76,6 +91,10 @@ export class FooterComponent implements Component {
 
 	setAutoCompactEnabled(enabled: boolean): void {
 		this.autoCompactEnabled = enabled;
+	}
+
+	setDisplayIndicators(indicators: FooterDisplayIndicators): void {
+		this.displayIndicators = indicators;
 	}
 
 	/**
@@ -174,6 +193,21 @@ export class FooterComponent implements Component {
 		const sessionName = this.session.sessionManager.getSessionName();
 		if (sessionName) {
 			pwd = `${pwd} • ${sessionName}`;
+		}
+
+		// Add display-mode indicators for settings that differ from their default
+		const indicatorParts: string[] = [];
+		if (this.displayIndicators.tools !== "collapsed") {
+			indicatorParts.push(`tools: ${this.displayIndicators.tools}`);
+		}
+		if (this.displayIndicators.narrationHidden) {
+			indicatorParts.push("narration: hidden");
+		}
+		if (this.displayIndicators.thinkingHidden) {
+			indicatorParts.push("thinking: hidden");
+		}
+		if (indicatorParts.length > 0) {
+			pwd = `${pwd} ${theme.fg("muted", `[${indicatorParts.join(" • ")}]`)}`;
 		}
 
 		// Build stats line

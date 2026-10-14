@@ -280,3 +280,46 @@ describe("FooterComponent width handling", () => {
 		expect(stats).not.toContain("(sub)");
 	});
 });
+
+describe("FooterComponent display indicators", () => {
+	beforeAll(() => {
+		initTheme(undefined, false);
+	});
+
+	it("shows no indicators when all settings are at their default", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
+
+		const firstLine = stripAnsi(footer.render(120)[0]);
+		expect(firstLine).not.toContain("[");
+		expect(firstLine).not.toContain("tools:");
+	});
+
+	it("shows tools, narration, and thinking indicators when not at default", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
+		footer.setDisplayIndicators({ tools: "hidden", narrationHidden: true, thinkingHidden: true });
+
+		const firstLine = stripAnsi(footer.render(120)[0]);
+		expect(firstLine).toContain("[tools: hidden • narration: hidden • thinking: hidden]");
+	});
+
+	it("shows only the indicator that differs from default", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
+		footer.setDisplayIndicators({ tools: "expanded", narrationHidden: false, thinkingHidden: false });
+
+		const firstLine = stripAnsi(footer.render(120)[0]);
+		expect(firstLine).toContain("[tools: expanded]");
+		expect(firstLine).not.toContain("narration");
+		expect(firstLine).not.toContain("thinking");
+	});
+
+	it("keeps the first line within width with indicators", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "한글".repeat(30) }), createFooterData(1));
+		footer.setDisplayIndicators({ tools: "hidden", narrationHidden: true, thinkingHidden: true });
+
+		const width = 93;
+		const lines = footer.render(width);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+	});
+});

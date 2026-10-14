@@ -275,3 +275,69 @@ describe("AssistantMessageComponent", () => {
 		expect(unpaddedLines.some((line) => line.startsWith("hello"))).toBe(true);
 	});
 });
+
+describe("AssistantMessageComponent hideWithToolCalls", () => {
+	test("hides intermediate narration that precedes tool calls", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage(
+				[
+					{ type: "text", text: "Let me check the file." },
+					{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "file.txt" } },
+				],
+				{ stopReason: "toolUse" },
+			),
+		);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Let me check the file.");
+
+		component.setHideWithToolCalls(true);
+		expect(component.render(80)).toEqual([]);
+
+		component.setHideWithToolCalls(false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Let me check the file.");
+	});
+
+	test("keeps final answers without tool calls visible", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: "Done. Summary here." }]),
+		);
+		component.setHideWithToolCalls(true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Done. Summary here.");
+	});
+
+	test("keeps aborted messages visible even when they contain tool calls", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage(
+				[
+					{ type: "text", text: "partial work" },
+					{ type: "toolCall", id: "tool-1", name: "read", arguments: {} },
+				],
+				{ stopReason: "aborted" },
+			),
+		);
+		component.setHideWithToolCalls(true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("partial work");
+	});
+
+	test("keeps streaming tool-call messages visible until stopReason is final", () => {
+		initTheme("dark");
+		const message = createAssistantMessage(
+			[
+				{ type: "text", text: "streaming narration" },
+				{ type: "toolCall", id: "tool-1", name: "read", arguments: {} },
+			],
+			{ stopReason: undefined as unknown as "toolUse" },
+		);
+		const component = new AssistantMessageComponent(undefined);
+		component.setHideWithToolCalls(true);
+
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("streaming narration");
+
+		const finalMessage = { ...message, stopReason: "toolUse" as const };
+		component.updateContent(finalMessage, false);
+		expect(component.render(80)).toEqual([]);
+	});
+});

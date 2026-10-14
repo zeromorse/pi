@@ -52,6 +52,11 @@ describe("thinking visibility while a bash tool is running (#8611)", () => {
 			settingsManager: { setHideThinkingBlock: vi.fn() },
 			chatContainer,
 			ui,
+			footer: { setDisplayIndicators: vi.fn() },
+			updateFooterDisplayIndicators: Reflect.get(
+				InteractiveMode.prototype,
+				"updateFooterDisplayIndicators",
+			) as () => void,
 			updateThinkingBlockVisibility() {
 				updateThinkingBlockVisibility.call(this);
 			},

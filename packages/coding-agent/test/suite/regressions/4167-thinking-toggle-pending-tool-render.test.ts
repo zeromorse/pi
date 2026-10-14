@@ -46,7 +46,8 @@ type RenderSessionContextThis = {
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
 	session: { retryAttempt: number; modelRegistry: { find(provider: string, modelId: string): undefined } };
-	toolOutputExpanded: boolean;
+	toolOutputDisplay: "expanded" | "collapsed" | "hidden";
+	applyToolOutputDisplay(component: ToolExecutionComponent): void;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
 	getRegisteredToolDefinition(toolName: string): undefined;
@@ -78,13 +79,18 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
 		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },
-		toolOutputExpanded: false,
+		toolOutputDisplay: "collapsed",
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),
 		getRegisteredToolDefinition: (_toolName: string) => undefined,
 		maybeShowAssistantDiagnostics: vi.fn(),
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
+		applyToolOutputDisplay: (
+			InteractiveMode.prototype as unknown as {
+				applyToolOutputDisplay: (component: ToolExecutionComponent) => void;
+			}
+		).applyToolOutputDisplay,
 		addMessageToChat(message: AgentMessage) {
 			chatContainer.addChild(new Text(message.role, 0, 0));
 		},

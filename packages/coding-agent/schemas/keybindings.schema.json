@@ -233,7 +233,11 @@
     },
     "app.tools.expand": {
       "$ref": "#/$defs/KeybindingValue",
-      "description": "Toggle tool output"
+      "description": "Cycle tool output display"
+    },
+    "app.narration.toggle": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Toggle intermediate narration"
     },
     "app.thinking.toggle": {
       "$ref": "#/$defs/KeybindingValue",

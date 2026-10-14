@@ -292,10 +292,10 @@ export interface ExtensionUIContext {
 	/** Set the current theme by name or Theme object. */
 	setTheme(theme: string | Theme): { success: boolean; error?: string };
 
-	/** Get current tool output expansion state. */
+	/** Get current tool output expansion state. True when fully expanded. */
 	getToolsExpanded(): boolean;
 
-	/** Set tool output expansion state. */
+	/** Set tool output expansion state. Does not control the hidden display mode. */
 	setToolsExpanded(expanded: boolean): void;
 }
 

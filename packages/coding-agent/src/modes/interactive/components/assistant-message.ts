@@ -21,6 +21,8 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private isStreaming = false;
+	/** When true, hide this message entirely if it precedes tool calls (intermediate narration). */
+	private hideWithToolCalls = false;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 
 	constructor(
@@ -63,6 +65,10 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	setHideWithToolCalls(hide: boolean): void {
+		this.hideWithToolCalls = hide;
+	}
+
 	setHiddenThinkingLabel(label: string): void {
 		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
@@ -78,6 +84,12 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// Intermediate narration that precedes tool calls is hidden in hidden display mode.
+		// Aborted/error messages keep their partial text visible.
+		if (this.hideWithToolCalls && this.hasToolCalls && this.lastMessage?.stopReason === "toolUse") {
+			return [];
+		}
+
 		const lines = super.render(width);
 		if (this.hasToolCalls || lines.length === 0) {
 			return lines;
