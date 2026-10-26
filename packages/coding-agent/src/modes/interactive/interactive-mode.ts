@@ -3856,7 +3856,10 @@ export class InteractiveMode {
 		this.chatContainer.addChild(component);
 	}
 
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	private addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; messageId?: string; timestamp?: string },
+	): void {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(
@@ -3939,6 +3942,8 @@ export class InteractiveMode {
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
 								this.getMarkdownTransformers(),
+								options?.messageId,
+								options?.timestamp,
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -3948,6 +3953,8 @@ export class InteractiveMode {
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
 							this.getMarkdownTransformers(),
+							options?.messageId,
+							options?.timestamp,
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3965,6 +3972,8 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.getMarkdownTransformers(),
+					options?.messageId,
+					options?.timestamp,
 				);
 				this.applyToolOutputDisplay(assistantComponent);
 				this.chatContainer.addChild(assistantComponent);
@@ -3982,6 +3991,7 @@ export class InteractiveMode {
 
 	private renderSessionItems(
 		items: readonly RenderSessionItem[],
+		messageMeta?: Map<AgentMessage, { id: string; timestamp: string }>,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
@@ -4014,7 +4024,11 @@ export class InteractiveMode {
 			const message = item;
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
-				this.addMessageToChat(message);
+				const meta = messageMeta?.get(message);
+				this.addMessageToChat(message, {
+					messageId: meta?.id,
+					timestamp: meta?.timestamp,
+				});
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
@@ -4064,7 +4078,12 @@ export class InteractiveMode {
 				}
 			} else {
 				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
+				const meta = messageMeta?.get(message);
+				this.addMessageToChat(message, {
+					...options,
+					messageId: meta?.id,
+					timestamp: meta?.timestamp,
+				});
 			}
 		}
 
@@ -4086,17 +4105,21 @@ export class InteractiveMode {
 	): void {
 		// Selection coordinates point into the transcript being replaced (#9311).
 		if (this.renderer instanceof TuiAltScreen) this.renderer.resetTextSelection();
+		const messageMeta = new Map<AgentMessage, { id: string; timestamp: string }>();
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
 			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
 				return [entry];
 			}
 			const messages = sessionEntryToContextMessages(entry);
+			for (const msg of messages) {
+				messageMeta.set(msg, { id: entry.id, timestamp: entry.timestamp });
+			}
 			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
 				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
 			}
 			return messages;
 		});
-		this.renderSessionItems(items, options);
+		this.renderSessionItems(items, messageMeta, options);
 	}
 
 	private addCacheWarmingUsage(entry: UsageEntry): void {

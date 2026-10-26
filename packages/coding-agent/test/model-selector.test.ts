@@ -62,6 +62,32 @@ describe("model selector", () => {
 		selector.dispose();
 	});
 
+	// #5916
+	it("shows model names that differ from the ID", async () => {
+		harness = await createHarness({
+			models: [
+				{ id: "minimax/minimax-m3", name: "MiniMax M3 [parasail]" },
+				{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+			],
+		});
+		const provider = harness.getModel("minimax/minimax-m3")!.provider;
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			undefined,
+			harness.session.modelRuntime,
+			[],
+			() => {},
+			() => {},
+		);
+
+		const rows = stripAnsi(selector.render(120).join("\n"))
+			.split("\n")
+			.map((line) => line.slice(4).trimEnd());
+		expect(rows).toContain(`minimax/minimax-m3 (MiniMax M3 [parasail]) [${provider}]`);
+		expect(rows).toContain(`claude-sonnet-4-5 [${provider}]`);
+		selector.dispose();
+	});
+
 	it("uses the configured save binding", async () => {
 		setKeybindings(new KeybindingsManager({ "app.models.save": "ctrl+r" }));
 		harness = await createHarness();
@@ -147,8 +173,10 @@ function renderLines(selector: ModelSelectorComponent): string[] {
 function highlightedId(lines: string[]): string | undefined {
 	const line = lines.find((l) => l.startsWith("→ "));
 	if (!line) return undefined;
-	const rest = line.replace(/^→\s*/, "");
-	return rest.split(" [")[0]?.replace(/^✓\s*/, "").trim() || undefined;
+	// Row shape: "→ [✓ ]<id>[ (Name)] [provider] · badges". Strip the optional
+	// distinct-name part before the provider badge.
+	const rest = line.replace(/^→\s*/, "").replace(/^✓\s*/, "");
+	return rest.split(/ [([]/)[0]?.trim() || undefined;
 }
 
 describe("two-level provider → model navigation", () => {
@@ -206,14 +234,14 @@ describe("two-level provider → model navigation", () => {
 		expect(lines.some((l) => l.includes("alpha (2)"))).toBe(true);
 		expect(lines.some((l) => l.includes("beta (2)"))).toBe(true);
 		// No model rows are rendered while browsing providers.
-		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(false);
-		expect(lines.some((l) => l.includes("beta-1 [beta]"))).toBe(false);
+		expect(lines.some((l) => l.includes("alpha-1"))).toBe(false);
+		expect(lines.some((l) => l.includes("beta-1"))).toBe(false);
 
 		// Enter on the highlighted provider (alpha) opens its model list.
 		selector.handleInput("\r");
 		lines = renderLines(selector);
 		expect(highlightedId(lines)).toBe("alpha-1");
-		expect(lines.some((l) => l.includes("alpha-2 [alpha]"))).toBe(true);
+		expect(lines.some((l) => l.includes("alpha-2 (Alpha Two) [alpha]"))).toBe(true);
 		expect(lines.some((l) => l.includes("beta-1"))).toBe(false);
 
 		// Enter selects the current model.
@@ -245,7 +273,7 @@ describe("two-level provider → model navigation", () => {
 		// Move down to beta and drill in.
 		selector.handleInput("\x1b[B");
 		selector.handleInput("\r");
-		expect(renderLines(selector).some((l) => l.includes("beta-1 [beta]"))).toBe(true);
+		expect(renderLines(selector).some((l) => l.includes("beta-1 (Beta One) [beta]"))).toBe(true);
 
 		// Esc while browsing a provider's models returns to the provider list.
 		selector.handleInput("\x1b");
@@ -254,7 +282,7 @@ describe("two-level provider → model navigation", () => {
 
 		// Drill into beta again, then Backspace on the empty search returns.
 		selector.handleInput("\r");
-		expect(renderLines(selector).some((l) => l.includes("beta-1 [beta]"))).toBe(true);
+		expect(renderLines(selector).some((l) => l.includes("beta-1 (Beta One) [beta]"))).toBe(true);
 		selector.handleInput("\x7f");
 		expect(renderLines(selector).some((l) => l.includes("beta (1)"))).toBe(true);
 		expect(cancelled).toBe(false);
@@ -292,14 +320,14 @@ describe("two-level provider → model navigation", () => {
 			selector.handleInput(char);
 		}
 		let lines = renderLines(selector);
-		expect(lines.some((l) => l.includes("alpha-2 [alpha]"))).toBe(true);
+		expect(lines.some((l) => l.includes("alpha-2 (Alpha Two) [alpha]"))).toBe(true);
 		expect(lines.some((l) => l.includes("beta-1"))).toBe(false);
 
 		// Clearing the query with Esc returns to the provider list.
 		selector.handleInput("\x1b");
 		lines = renderLines(selector);
 		expect(lines.some((l) => l.includes("alpha (2)"))).toBe(true);
-		expect(lines.some((l) => l.includes("alpha-2 [alpha]"))).toBe(false);
+		expect(lines.some((l) => l.includes("alpha-2"))).toBe(false);
 		selector.dispose();
 	});
 
@@ -326,14 +354,14 @@ describe("two-level provider → model navigation", () => {
 
 		let lines = renderLines(selector);
 		// Models are listed immediately, with no provider-list row in between.
-		expect(lines.some((l) => l.includes("model-1 [solo]"))).toBe(true);
+		expect(lines.some((l) => l.includes("model-1 (One) [solo]"))).toBe(true);
 		expect(lines.some((l) => l.includes("solo (2)"))).toBe(false);
 
 		// Backspace on the empty search stays on the model list (no hidden
 		// one-provider list to step back to).
 		selector.handleInput("\x7f");
 		lines = renderLines(selector);
-		expect(lines.some((l) => l.includes("model-1 [solo]"))).toBe(true);
+		expect(lines.some((l) => l.includes("model-1 (One) [solo]"))).toBe(true);
 		expect(lines.some((l) => l.includes("solo (2)"))).toBe(false);
 
 		// Esc closes directly instead of stepping back to a skipped provider list.
@@ -369,13 +397,13 @@ describe("two-level provider → model navigation", () => {
 		// even when exactly one provider has a single model.
 		expect(lines.some((l) => l.includes("alpha (1)"))).toBe(true);
 		expect(lines.some((l) => l.includes("beta (2)"))).toBe(true);
-		expect(lines.some((l) => l.includes("alpha-1 [alpha]"))).toBe(false);
+		expect(lines.some((l) => l.includes("alpha-1"))).toBe(false);
 
 		// Enter on the single-model provider still drills into its model.
 		selector.handleInput("\x1b[B"); // move to alpha
 		selector.handleInput("\r");
 		const drilled = renderLines(selector);
-		expect(drilled.some((l) => l.includes("alpha-1 [alpha]"))).toBe(true);
+		expect(drilled.some((l) => l.includes("alpha-1 (Alpha One) [alpha]"))).toBe(true);
 		selector.dispose();
 	});
 
@@ -406,16 +434,16 @@ describe("two-level provider → model navigation", () => {
 		const lines = renderLines(selector);
 		// Default sorts first, flash second, remaining models after.
 		expect(highlightedId(lines)).toBe("model-2");
-		expect(lines.findIndex((l) => l.includes("model-2 [solo]"))).toBeLessThan(
-			lines.findIndex((l) => l.includes("model-3 [solo]")),
+		expect(lines.findIndex((l) => l.includes("model-2 (Two) [solo]"))).toBeLessThan(
+			lines.findIndex((l) => l.includes("model-3 (Three) [solo]")),
 		);
-		expect(lines.findIndex((l) => l.includes("model-3 [solo]"))).toBeLessThan(
-			lines.findIndex((l) => l.includes("model-1 [solo]")),
+		expect(lines.findIndex((l) => l.includes("model-3 (Three) [solo]"))).toBeLessThan(
+			lines.findIndex((l) => l.includes("model-1 (One) [solo]")),
 		);
 		// Badge text on the marked rows only.
-		expect(lines.some((l) => l.includes("model-2 [solo] · default"))).toBe(true);
-		expect(lines.some((l) => l.includes("model-3 [solo] · default-flash"))).toBe(true);
-		const unmarked = lines.find((l) => l.includes("model-1 [solo]"));
+		expect(lines.some((l) => l.includes("model-2 (Two) [solo] · default"))).toBe(true);
+		expect(lines.some((l) => l.includes("model-3 (Three) [solo] · default-flash"))).toBe(true);
+		const unmarked = lines.find((l) => l.includes("model-1 (One) [solo]"));
 		expect(unmarked?.includes("default")).toBe(false);
 		selector.dispose();
 	});

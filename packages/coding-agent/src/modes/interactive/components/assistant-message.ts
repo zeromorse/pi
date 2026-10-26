@@ -23,6 +23,8 @@ export class AssistantMessageComponent extends Container {
 	private isStreaming = false;
 	/** When true, hide this message entirely if it precedes tool calls (intermediate narration). */
 	private hideWithToolCalls = false;
+	private messageId?: string;
+	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 
 	constructor(
@@ -32,6 +34,8 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		messageId?: string,
+		timestamp?: string,
 	) {
 		super();
 
@@ -40,6 +44,8 @@ export class AssistantMessageComponent extends Container {
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.messageId = messageId;
+		this.timestamp = timestamp;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -124,7 +130,13 @@ export class AssistantMessageComponent extends Container {
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.contentContainer.addChild(
 					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+						transform: createMarkdownTransform(
+							"assistant",
+							this.isStreaming,
+							this.markdownTransformers,
+							this.messageId,
+							this.timestamp,
+						),
 					}),
 				);
 			} else if (content.type === "thinking") {
@@ -169,6 +181,8 @@ export class AssistantMessageComponent extends Container {
 									"assistant-thinking",
 									this.isStreaming,
 									this.markdownTransformers,
+									this.messageId,
+									this.timestamp,
 								),
 							},
 						);

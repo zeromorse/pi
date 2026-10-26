@@ -5,7 +5,7 @@ import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamFunction,
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { getPiUserAgent } from "../utils/pi-user-agent.ts";
+import { getIdentityHeaders } from "../utils/identity.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
@@ -118,12 +118,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as { index?: number }).index;
-				// Streaming scratch buffers are only used during parsing; never persist them.
-				delete (block as { partialJson?: string }).partialJson;
-				delete (block as { customInput?: unknown }).customInput;
-			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -158,7 +152,7 @@ export const streamSimple: StreamFunction<"azure-openai-responses", SimpleStream
 };
 
 function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
-	const headers = { "User-Agent": getPiUserAgent(), ...model.headers };
+	const headers = { ...getIdentityHeaders(model, options?.identity), ...model.headers };
 
 	if (options?.headers) {
 		Object.assign(headers, options.headers);
