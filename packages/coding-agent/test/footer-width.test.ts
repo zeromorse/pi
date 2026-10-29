@@ -286,15 +286,14 @@ describe("FooterComponent display indicators", () => {
 		initTheme(undefined, false);
 	});
 
-	it("shows no indicators when all settings are at their default", () => {
+	it("shows the current display state at the built-in default", () => {
 		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
 
 		const firstLine = stripAnsi(footer.render(120)[0]);
-		expect(firstLine).not.toContain("[");
-		expect(firstLine).not.toContain("tools:");
+		expect(firstLine).toContain("[tools: collapsed • narration: shown • thinking: visible]");
 	});
 
-	it("shows tools, narration, and thinking indicators when not at default", () => {
+	it("shows the current display state when all three are hidden", () => {
 		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
 		footer.setDisplayIndicators({ tools: "hidden", narrationHidden: true, thinkingHidden: true });
 
@@ -302,14 +301,12 @@ describe("FooterComponent display indicators", () => {
 		expect(firstLine).toContain("[tools: hidden • narration: hidden • thinking: hidden]");
 	});
 
-	it("shows only the indicator that differs from default", () => {
+	it("shows mixed display states", () => {
 		const footer = new FooterComponent(createSession({ sessionName: "work" }), createFooterData(1));
-		footer.setDisplayIndicators({ tools: "expanded", narrationHidden: false, thinkingHidden: false });
+		footer.setDisplayIndicators({ tools: "expanded", narrationHidden: false, thinkingHidden: true });
 
 		const firstLine = stripAnsi(footer.render(120)[0]);
-		expect(firstLine).toContain("[tools: expanded]");
-		expect(firstLine).not.toContain("narration");
-		expect(firstLine).not.toContain("thinking");
+		expect(firstLine).toContain("[tools: expanded • narration: shown • thinking: hidden]");
 	});
 
 	it("keeps the first line within width with indicators", () => {

@@ -5,6 +5,8 @@
 ### Added
 
 - Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
+- New settings `toolOutputDisplay` and `hideNarration` define the display state new sessions start with, alongside the existing `hideThinkingBlock`. The `Ctrl+O`, `Ctrl+N`, and `Ctrl+T` keybindings change the display only for the current session; `/settings` or editing `settings.json` changes the saved default
+- The footer display indicators now always show the current state of all three display modes (`tools: …`, `narration: …`, `thinking: …`) instead of only indicators that differ from the built-in default
 
 ### Changed
 

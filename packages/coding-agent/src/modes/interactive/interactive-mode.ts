@@ -114,7 +114,8 @@ import {
 	sessionEntryToContextMessages,
 	type UsageEntry,
 } from "../../core/session-manager.ts";
-import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
+import { SETTINGS_DEFAULTS } from "../../core/settings-defaults.ts";
+import type { FullscreenExitOutput, ToolOutputDisplay, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -233,9 +234,6 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
-
-/** Tool output display mode, cycled by the tool expansion keybinding. */
-type ToolOutputDisplay = "expanded" | "collapsed" | "hidden";
 
 class ExpandableText extends ThemedText implements Expandable {
 	private readonly state: { expanded: boolean };
@@ -516,10 +514,10 @@ export class InteractiveMode {
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
 	// Tool output display state
-	private toolOutputDisplay: ToolOutputDisplay = "collapsed";
+	private toolOutputDisplay: ToolOutputDisplay = SETTINGS_DEFAULTS.toolOutputDisplay;
 
 	// Intermediate narration (assistant text preceding tool calls) visibility
-	private hideIntermediateNarration = false;
+	private hideIntermediateNarration: boolean = SETTINGS_DEFAULTS.hideNarration;
 
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
@@ -669,8 +667,10 @@ export class InteractiveMode {
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
 
-		// Load hide thinking block setting
+		// Load transcript display settings
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.toolOutputDisplay = this.settingsManager.getToolOutputDisplay();
+		this.hideIntermediateNarration = this.settingsManager.getHideNarration();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.updateFooterDisplayIndicators();
 
@@ -2081,6 +2081,8 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.toolOutputDisplay = this.settingsManager.getToolOutputDisplay();
+		this.hideIntermediateNarration = this.settingsManager.getHideNarration();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.updateFooterDisplayIndicators();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
@@ -4637,7 +4639,6 @@ export class InteractiveMode {
 
 	private toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
-		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 		this.updateThinkingBlockVisibility();
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
 		this.updateFooterDisplayIndicators();
@@ -4986,6 +4987,8 @@ export class InteractiveMode {
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					toolOutputDisplay: this.toolOutputDisplay,
+					hideNarration: this.hideIntermediateNarration,
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
@@ -5090,6 +5093,19 @@ export class InteractiveMode {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
 						this.updateThinkingBlockVisibility();
+					},
+					onToolOutputDisplayChange: (display) => {
+						this.settingsManager.setToolOutputDisplay(display);
+						this.setToolOutputDisplay(display);
+					},
+					onHideNarrationChange: (hidden) => {
+						this.hideIntermediateNarration = hidden;
+						this.settingsManager.setHideNarration(hidden);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent) {
+								child.setHideWithToolCalls(hidden);
+							}
+						}
 					},
 					onMermaidRenderingModeChange: (mode) => {
 						this.settingsManager.setMermaidRenderingMode(mode);
@@ -6613,6 +6629,8 @@ export class InteractiveMode {
 				return;
 			}
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+			this.toolOutputDisplay = this.settingsManager.getToolOutputDisplay();
+			this.hideIntermediateNarration = this.settingsManager.getHideNarration();
 			this.outputPad = this.settingsManager.getOutputPad();
 			this.rebuildChatFromMessages();
 			chatRestoredBeforeSessionStart = true;

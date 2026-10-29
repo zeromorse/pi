@@ -160,6 +160,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 			chatContainer: { children: [chatChild] },
 			ui: { requestRender: vi.fn() },
 			footer: { setDisplayIndicators: vi.fn() },
+			settingsManager: { setToolOutputDisplay: vi.fn(), setHideNarration: vi.fn() },
 			updateFooterDisplayIndicators: (
 				InteractiveMode.prototype as unknown as {
 					updateFooterDisplayIndicators: () => void;
@@ -171,6 +172,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 		(InteractiveMode as any).prototype.setToolOutputDisplay.call(fakeThis, "expanded");
 
 		expect(fakeThis.toolOutputDisplay).toBe("expanded");
+		expect(fakeThis.settingsManager.setToolOutputDisplay).not.toHaveBeenCalled();
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
@@ -189,6 +191,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 			chatContainer: { children: [tool] },
 			ui,
 			footer: { setDisplayIndicators: vi.fn() },
+			settingsManager: { setToolOutputDisplay: vi.fn(), setHideNarration: vi.fn() },
 			updateFooterDisplayIndicators: (
 				InteractiveMode.prototype as unknown as {
 					updateFooterDisplayIndicators: () => void;
@@ -200,6 +203,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 		(InteractiveMode as any).prototype.setToolOutputDisplay.call(fakeThis, "hidden");
 
 		expect(fakeThis.toolOutputDisplay).toBe("hidden");
+		expect(fakeThis.settingsManager.setToolOutputDisplay).not.toHaveBeenCalled();
 		expect(setHiddenSpy).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: hidden");
 	});
@@ -230,6 +234,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 			hideIntermediateNarration: false,
 			chatContainer: { children: [intermediate] },
 			footer: { setDisplayIndicators: vi.fn() },
+			settingsManager: { setToolOutputDisplay: vi.fn(), setHideNarration: vi.fn() },
 			updateFooterDisplayIndicators: (
 				InteractiveMode.prototype as unknown as {
 					updateFooterDisplayIndicators: () => void;
@@ -241,6 +246,7 @@ describe("InteractiveMode.setToolOutputDisplay", () => {
 		(InteractiveMode as any).prototype.toggleIntermediateNarration.call(fakeThis);
 
 		expect(fakeThis.hideIntermediateNarration).toBe(true);
+		expect(fakeThis.settingsManager.setHideNarration).not.toHaveBeenCalled();
 		expect(setHideSpy).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Narration: hidden");
 

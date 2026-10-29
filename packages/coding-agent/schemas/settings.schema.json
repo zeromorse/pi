@@ -211,6 +211,29 @@
       "type": "boolean",
       "default": false
     },
+    "toolOutputDisplay": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "collapsed"
+        },
+        {
+          "type": "string",
+          "const": "hidden"
+        },
+        {
+          "type": "string",
+          "const": "expanded"
+        }
+      ],
+      "description": "Initial display for tool calls. \"collapsed\" shows headers only, \"hidden\" removes finished tool calls, \"expanded\" shows full output.",
+      "default": "collapsed"
+    },
+    "hideNarration": {
+      "type": "boolean",
+      "description": "Hide intermediate narration (assistant text preceding tool calls) in the transcript.",
+      "default": false
+    },
     "showCacheMissNotices": {
       "type": "boolean",
       "description": "Show cache cost and provider recovery notices.",

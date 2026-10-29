@@ -25,6 +25,8 @@ export const SETTINGS_DEFAULTS = {
 		},
 	},
 	hideThinkingBlock: false,
+	toolOutputDisplay: "collapsed",
+	hideNarration: false,
 	showCacheMissNotices: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",

@@ -22,6 +22,7 @@ import {
 	type MermaidRenderingMode,
 	type QuietStartup,
 	type SessionShareDestination,
+	type ToolOutputDisplay,
 	type TuiMode,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
@@ -81,6 +82,8 @@ export interface SettingsConfig {
 	terminalTheme: TerminalTheme;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	toolOutputDisplay: ToolOutputDisplay;
+	hideNarration: boolean;
 	mermaidRenderingMode: MermaidRenderingMode;
 	showCacheMissNotices: boolean;
 	collapseChangelog: boolean;
@@ -121,6 +124,8 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onToolOutputDisplayChange: (display: ToolOutputDisplay) => void;
+	onHideNarrationChange: (hidden: boolean) => void;
 	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
@@ -544,6 +549,20 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "tool-output-display",
+				label: "Tool output display",
+				description: "Initial display for tool calls: collapsed headers, hidden finished calls, or expanded output",
+				currentValue: config.toolOutputDisplay,
+				values: ["collapsed", "hidden", "expanded"],
+			},
+			{
+				id: "hide-narration",
+				label: "Hide narration",
+				description: "Hide intermediate narration (assistant text preceding tool calls)",
+				currentValue: config.hideNarration ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "mermaid-rendering",
 				label: "Mermaid diagrams",
 				description: "Render Mermaid code blocks as Unicode diagrams",
@@ -926,6 +945,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
+						break;
+					case "tool-output-display":
+						callbacks.onToolOutputDisplayChange(newValue as ToolOutputDisplay);
+						break;
+					case "hide-narration":
+						callbacks.onHideNarrationChange(newValue === "true");
 						break;
 					case "mermaid-rendering":
 						callbacks.onMermaidRenderingModeChange(newValue as MermaidRenderingMode);

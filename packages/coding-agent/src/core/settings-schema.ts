@@ -253,6 +253,19 @@ export const SettingsSchema = Type.Object(
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),
+		toolOutputDisplay: Type.Optional(
+			Type.Union([Type.Literal("collapsed"), Type.Literal("hidden"), Type.Literal("expanded")], {
+				description:
+					'Initial display for tool calls. "collapsed" shows headers only, "hidden" removes finished tool calls, "expanded" shows full output.',
+				default: SETTINGS_DEFAULTS.toolOutputDisplay,
+			}),
+		),
+		hideNarration: Type.Optional(
+			Type.Boolean({
+				description: "Hide intermediate narration (assistant text preceding tool calls) in the transcript.",
+				default: SETTINGS_DEFAULTS.hideNarration,
+			}),
+		),
 		showCacheMissNotices: Type.Optional(
 			Type.Boolean({
 				description: "Show cache cost and provider recovery notices.",
@@ -486,6 +499,7 @@ export type PackageSource = Static<typeof PackageSourceSchema>;
 export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutput"]>;
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;
 export type CacheWarmingMode = NonNullable<SettingsInput["cacheWarming"]>;
+export type ToolOutputDisplay = NonNullable<SettingsInput["toolOutputDisplay"]>;
 export interface Settings extends Omit<SettingsInput, "queueMode" | "retry" | "skills" | "websockets"> {
 	retry?: RetrySettings;
 	skills?: string[];

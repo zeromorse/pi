@@ -94,6 +94,8 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
+| `toolOutputDisplay` | `"collapsed" \| "hidden" \| "expanded"` | `"collapsed"` | Display state for tool calls at startup. `"collapsed"` shows headers only, `"hidden"` removes finished tool calls, `"expanded"` shows full output. The tool output keybinding changes the current session only; `/settings` or this setting defines the default. |
+| `hideNarration` | boolean | `false` | Hide intermediate narration (assistant text preceding tool calls) at startup. The narration keybinding changes the current session only. |
 | `theme` | string | `"system"` | Built-in or custom theme name. `system` derives colors from the terminal theme. |
 | `quietStartup` | boolean \| `"header"` | `false` | `true` hides the startup header and loaded-resource listing. `"header"` keeps the header (version and key hints) but hides the model scope line and loaded-resource listing. |
 | `tuiMode` | `"regular" \| "fullscreen"` | `"fullscreen"` | Interactive terminal UI mode. |

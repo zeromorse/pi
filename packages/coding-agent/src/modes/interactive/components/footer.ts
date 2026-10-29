@@ -55,9 +55,9 @@ interface SessionStats {
 	contextUsage: ContextUsage | undefined;
 }
 
-/** Display-mode indicators shown in the footer when they differ from their default. */
+/** Current display-mode state always shown in the footer. */
 export interface FooterDisplayIndicators {
-	/** Tool output display mode; "collapsed" is the default and is not shown. */
+	/** Tool output display mode. */
 	tools: "expanded" | "collapsed" | "hidden";
 	/** Whether intermediate narration is hidden. */
 	narrationHidden: boolean;
@@ -195,20 +195,13 @@ export class FooterComponent implements Component {
 			pwd = `${pwd} • ${sessionName}`;
 		}
 
-		// Add display-mode indicators for settings that differ from their default
-		const indicatorParts: string[] = [];
-		if (this.displayIndicators.tools !== "collapsed") {
-			indicatorParts.push(`tools: ${this.displayIndicators.tools}`);
-		}
-		if (this.displayIndicators.narrationHidden) {
-			indicatorParts.push("narration: hidden");
-		}
-		if (this.displayIndicators.thinkingHidden) {
-			indicatorParts.push("thinking: hidden");
-		}
-		if (indicatorParts.length > 0) {
-			pwd = `${pwd} ${theme.fg("muted", `[${indicatorParts.join(" • ")}]`)}`;
-		}
+		// Always show the current display-mode state in the footer
+		const indicatorParts: string[] = [
+			`tools: ${this.displayIndicators.tools}`,
+			`narration: ${this.displayIndicators.narrationHidden ? "hidden" : "shown"}`,
+			`thinking: ${this.displayIndicators.thinkingHidden ? "hidden" : "visible"}`,
+		];
+		pwd = `${pwd} ${theme.fg("muted", `[${indicatorParts.join(" • ")}]`)}`;
 
 		// Build stats line
 		const statsParts = [];

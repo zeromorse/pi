@@ -577,6 +577,35 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("transcript display settings", () => {
+		it("persists tool output display and narration settings", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getToolOutputDisplay()).toBe("collapsed");
+			expect(manager.getHideNarration()).toBe(false);
+
+			manager.setToolOutputDisplay("hidden");
+			manager.setHideNarration(true);
+			await manager.flush();
+
+			expect(manager.getToolOutputDisplay()).toBe("hidden");
+			expect(manager.getHideNarration()).toBe(true);
+			const savedSettings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(savedSettings.toolOutputDisplay).toBe("hidden");
+			expect(savedSettings.hideNarration).toBe(true);
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getToolOutputDisplay()).toBe("hidden");
+			expect(reloaded.getHideNarration()).toBe(true);
+		});
+
+		it("falls back to defaults for unsupported tool output display values", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ toolOutputDisplay: "fancy" }));
+
+			expect(SettingsManager.create(projectDir, agentDir).getToolOutputDisplay()).toBe("collapsed");
+		});
+	});
+
 	describe("markdown.mermaid", () => {
 		it("defaults to streaming and persists rendering modes", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

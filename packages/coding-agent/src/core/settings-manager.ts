@@ -21,6 +21,7 @@ import type {
 	SessionShareDestination,
 	Settings,
 	ThinkingBudgetsSettings,
+	ToolOutputDisplay,
 	TransportSetting,
 	TuiMode,
 	WarningSettings,
@@ -46,6 +47,7 @@ export type {
 	Settings,
 	TerminalSettings,
 	ThinkingBudgetsSettings,
+	ToolOutputDisplay,
 	TransportSetting,
 	TuiMode,
 	WarningSettings,
@@ -962,6 +964,15 @@ export class SettingsManager {
 		return this.settings.hideThinkingBlock ?? SETTINGS_DEFAULTS.hideThinkingBlock;
 	}
 
+	getToolOutputDisplay(): ToolOutputDisplay {
+		const value = this.settings.toolOutputDisplay;
+		return value === "hidden" || value === "expanded" ? value : SETTINGS_DEFAULTS.toolOutputDisplay;
+	}
+
+	getHideNarration(): boolean {
+		return this.settings.hideNarration ?? SETTINGS_DEFAULTS.hideNarration;
+	}
+
 	getShowCacheMissNotices(): boolean {
 		return this.settings.showCacheMissNotices ?? SETTINGS_DEFAULTS.showCacheMissNotices;
 	}
@@ -981,6 +992,18 @@ export class SettingsManager {
 	setHideThinkingBlock(hide: boolean): void {
 		this.globalSettings.hideThinkingBlock = hide;
 		this.markModified("hideThinkingBlock");
+		this.save();
+	}
+
+	setToolOutputDisplay(display: ToolOutputDisplay): void {
+		this.globalSettings.toolOutputDisplay = display;
+		this.markModified("toolOutputDisplay");
+		this.save();
+	}
+
+	setHideNarration(hide: boolean): void {
+		this.globalSettings.hideNarration = hide;
+		this.markModified("hideNarration");
 		this.save();
 	}
 
