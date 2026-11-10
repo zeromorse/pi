@@ -70,6 +70,8 @@ trap 'rm -f "$prompt_file"' EXIT
     echo
     echo "Hard constraints:"
     echo "- NEVER run git commit, git push, git reset, git checkout, git rebase, or git switch. The calling script verifies and commits."
+    echo "- NEVER run npm run build or any command that writes to dist/ (tsc -p tsconfig.build.json, esbuild, shx cp, bundlers). You are resolving a mid-merge tree; dist/ is gitignored and survives \`git merge --abort\`, so artifacts built from this mixed state would corrupt the globally linked pi binary if the merge is aborted later. Verification via \`npm run check\` and the tests does not require building."
+    echo "- Avoid npm install / npm ci unless a dependency is genuinely missing from node_modules; if you do run one, say so in the summary."
     echo "- Only modify files needed to resolve the conflicts and make checks and tests pass."
     echo "- The repo rules in AGENTS.md apply except where this prompt overrides them (you must not commit)."
     echo

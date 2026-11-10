@@ -178,6 +178,25 @@ if ! git merge main --no-edit; then
             ai_merged=1
         else
             git merge --abort 2>/dev/null || git reset --hard "$old_head"
+            # The headless AI ran unchecked commands inside the mid-merge tree,
+            # and dist/ + node_modules/ are gitignored, so they survive
+            # `git merge --abort`. The global pi may now be built from the
+            # aborted merge's mixed tree (see the 2026-11-10 pi-schema
+            # incident). Rebuild unconditionally from the clean pre-merge
+            # tree; offline build avoids the models.dev network dependency
+            # so self-healing works even when offline.
+            log "AI resolution failed, self-healing rebuild from clean my-main"
+            if npm install --ignore-scripts && npm run build:offline && "$PI_BIN" --version; then
+                log "self-healing rebuild OK, dist restored to my-main"
+            else
+                log "WARNING: self-healing rebuild failed, run pi-rebuild-global manually"
+            fi
+            if git status --porcelain | grep -q 'package-lock\.json'; then
+                # mechanical npm normalization, not merge content; the abort
+                # above already restored every tracked source file
+                log "npm install normalized package-lock.json, restoring it"
+                git restore package-lock.json
+            fi
             die "code conflicts need manual merge (AI resolution failed):$code_conflicts"
         fi
     fi
