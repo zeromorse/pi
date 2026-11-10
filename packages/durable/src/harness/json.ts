@@ -1,5 +1,5 @@
-import type { JsonValue } from "@earendil-works/chord";
 import { appendText, type Draft } from "@earendil-works/chord/delta";
+import type { JsonValue } from "@earendil-works/chord/json";
 
 /** How `assignJson()` writes one value instead of assigning it leaf by leaf. */
 export type AssignPlan =
@@ -26,7 +26,9 @@ export function assignJson<T extends object, K extends keyof T & (string | numbe
 	if (plan?.kind === "keep") return;
 	// Every target is a document container: JSON members or items, whatever its declared type names them.
 	const slots = target as Record<string | number, JsonValue>;
-	const current: JsonValue | undefined = slots[key];
+	// A `__proto__` member the target lacks reads through to Object.prototype; merging into that would pollute every
+	// object in the process. Other inherited members are functions, which are not merged into.
+	const current: JsonValue | undefined = key === "__proto__" && !Object.hasOwn(slots, key) ? undefined : slots[key];
 	const fields = plan?.kind === "fields" ? plan.fields : undefined;
 	if (isRecord(current) && isRecord(value)) {
 		for (const name of Object.keys(current)) if (!Object.hasOwn(value, name)) delete current[name];

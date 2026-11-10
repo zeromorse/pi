@@ -22,14 +22,14 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | Command | Description |
 |---|---|
 | `/new [name]` | Start a new session, optionally naming it (same as `/name`) |
-| `/resume` | Switch to another saved session |
+| `/resume` | Resume another session |
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
 | `/tree` | Navigate the session tree |
 | `/fork [name]` | Create a new session from an earlier user message, optionally with a name |
 | `/clone [name]` | Duplicate the current session at its current position, optionally with a name |
 | `/compact [instructions]` | Compact the current context, optionally with custom instructions |
-| `/import <path>` | Import and resume a JSONL session |
+| `/import <path>` | Import a JSONL session, preserving its ID and working directory |
 
 ## Export and share
 

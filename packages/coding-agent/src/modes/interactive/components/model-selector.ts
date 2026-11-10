@@ -4,6 +4,7 @@ import {
 	type Focusable,
 	fuzzyFilter,
 	getKeybindings,
+	getSelectPageIndex,
 	Input,
 	matchesKey,
 	Spacer,
@@ -40,6 +41,8 @@ interface DefaultModelReference {
 
 type ModelScope = "all" | "scoped";
 
+const MAX_VISIBLE = 10;
+
 /**
  * Component that renders a model selector with search.
  *
@@ -49,6 +52,7 @@ type ModelScope = "all" | "scoped";
  * list. A single available provider is skipped straight to its models.
  */
 export class ModelSelectorComponent extends Container implements Focusable {
+	readonly capturesViewportInput: boolean = true;
 	private searchInput: Input;
 
 	// Focusable implementation - propagate to searchInput for IME cursor positioning
@@ -170,7 +174,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		void this.refreshModels();
 	}
 
-	private loadModelsFromSnapshot(): void {
+	private loadModelsFromSnapshot(preferredModel?: Model<any>): void {
 		const models = this.modelRuntime.getAvailableSnapshot().map((model: Model<any>) => ({
 			provider: model.provider,
 			id: model.id,
@@ -188,7 +192,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		}));
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
 		this.buildProviderItems();
-		this.reconcile();
+		this.reconcile(preferredModel);
 	}
 
 	private buildProviderItems(): void {
@@ -243,7 +247,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 					this.refreshStatusSuccess = true;
 				}
 			}
-			this.loadModelsFromSnapshot();
+			// The user may have moved while the refresh was in flight, and the refresh can shift rows.
+			const selectedModel = this.isProviderView() ? undefined : this.filteredModels[this.modelSelectedIndex]?.model;
+			this.loadModelsFromSnapshot(selectedModel);
 			this.tui.requestRender();
 		} catch (error) {
 			if (this.closed) return;
@@ -344,11 +350,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	 * - With a search query keep the global/provider-scoped search.
 	 * - Otherwise validate the drilled provider, auto-enter the sole provider,
 	 *   and restore a sensible selection for the current view.
+	 *
+	 * When a preferred model is given (the selection the user had before the
+	 * reload), it is kept if it is still listed; otherwise the selection falls
+	 * back to the current model and is then clamped to the list length.
 	 */
-	private reconcile(): void {
+	private reconcile(preferredModel?: Model<any>): void {
 		const query = this.searchText();
 		if (query) {
-			this.filterModels(query);
+			this.filterModels(query, preferredModel);
 			return;
 		}
 		if (
@@ -370,10 +380,17 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			return;
 		}
 		const source = this.modelSource();
-		const currentIndex = source.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
-		this.modelSelectedIndex =
-			currentIndex >= 0 ? currentIndex : Math.min(this.modelSelectedIndex, Math.max(0, source.length - 1));
-		this.filterModels("");
+		const preferredIndex = preferredModel
+			? source.findIndex((item) => modelsAreEqual(preferredModel, item.model))
+			: -1;
+		if (preferredIndex >= 0) {
+			this.modelSelectedIndex = preferredIndex;
+		} else {
+			const currentIndex = source.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
+			this.modelSelectedIndex =
+				currentIndex >= 0 ? currentIndex : Math.min(this.modelSelectedIndex, Math.max(0, source.length - 1));
+		}
+		this.filterModels("", preferredModel);
 	}
 
 	private enterProvider(provider: string): void {
@@ -392,7 +409,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.updateList();
 	}
 
-	private filterModels(query: string): void {
+	private filterModels(query: string, preferredModel?: Model<any>): void {
 		const effectiveQuery = query.trim();
 		const source = this.modelSource();
 		if (effectiveQuery) {
@@ -414,12 +431,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		} else {
 			this.filteredModels = source;
 		}
-		// When filtering by a query, move the selector to the top row so the best
-		// match is highlighted. When the query is cleared, keep the current position
+		// Keep the preferred model selected if it is still listed. Otherwise, when
+		// filtering by a query, move the selector to the top row so the best match
+		// is highlighted. When the query is cleared, keep the current position
 		// clamped to the (restored) list length.
-		this.modelSelectedIndex = effectiveQuery
-			? 0
-			: Math.min(this.modelSelectedIndex, Math.max(0, this.filteredModels.length - 1));
+		const preferredIndex = preferredModel
+			? this.filteredModels.findIndex((item) => modelsAreEqual(preferredModel, item.model))
+			: -1;
+		if (preferredIndex >= 0) this.modelSelectedIndex = preferredIndex;
+		else
+			this.modelSelectedIndex = effectiveQuery
+				? 0
+				: Math.min(this.modelSelectedIndex, Math.max(0, this.filteredModels.length - 1));
 		this.updateList();
 	}
 
@@ -434,12 +457,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private renderProviderList(): void {
 		this.listContainer.clear();
 
-		const maxVisible = 10;
 		const startIndex = Math.max(
 			0,
-			Math.min(this.providerSelectedIndex - Math.floor(maxVisible / 2), this.providerItems.length - maxVisible),
+			Math.min(this.providerSelectedIndex - Math.floor(MAX_VISIBLE / 2), this.providerItems.length - MAX_VISIBLE),
 		);
-		const endIndex = Math.min(startIndex + maxVisible, this.providerItems.length);
+		const endIndex = Math.min(startIndex + MAX_VISIBLE, this.providerItems.length);
 
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.providerItems[i];
@@ -477,12 +499,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private renderModelList(): void {
 		this.listContainer.clear();
 
-		const maxVisible = 10;
 		const startIndex = Math.max(
 			0,
-			Math.min(this.modelSelectedIndex - Math.floor(maxVisible / 2), this.filteredModels.length - maxVisible),
+			Math.min(this.modelSelectedIndex - Math.floor(MAX_VISIBLE / 2), this.filteredModels.length - MAX_VISIBLE),
 		);
-		const endIndex = Math.min(startIndex + maxVisible, this.filteredModels.length);
+		const endIndex = Math.min(startIndex + MAX_VISIBLE, this.filteredModels.length);
 
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
@@ -551,9 +572,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		if (this.isProviderView()) {
 			hint = `${keyDisplayText("tui.select.confirm")} to browse models · ${keyDisplayText("tui.select.cancel")} to cancel`;
 		} else if (query) {
-			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} sets as default · ${keyDisplayText("tui.select.cancel")} to clear`;
+			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to clear`;
 		} else {
-			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} sets as default · ${keyDisplayText("tui.select.cancel")} or ${keyDisplayText("tui.editor.deleteCharBackward")} to pick another provider`;
+			hint = `${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} or ${keyDisplayText("tui.editor.deleteCharBackward")} to pick another provider`;
 		}
 		this.hintText.setText(theme.fg("dim", `  ${hint}`));
 	}
@@ -623,6 +644,22 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				if (this.filteredModels.length === 0) return;
 				this.modelSelectedIndex =
 					this.modelSelectedIndex === this.filteredModels.length - 1 ? 0 : this.modelSelectedIndex + 1;
+			}
+			this.updateList();
+			return;
+		}
+
+		// Page up/down
+		const pageIndex = providerView
+			? getSelectPageIndex(kb, keyData, this.providerSelectedIndex, this.providerItems.length, MAX_VISIBLE)
+			: getSelectPageIndex(kb, keyData, this.modelSelectedIndex, this.filteredModels.length, MAX_VISIBLE);
+		if (pageIndex !== undefined) {
+			if (providerView) {
+				if (this.providerItems.length === 0) return;
+				this.providerSelectedIndex = pageIndex;
+			} else {
+				if (this.filteredModels.length === 0) return;
+				this.modelSelectedIndex = pageIndex;
 			}
 			this.updateList();
 			return;

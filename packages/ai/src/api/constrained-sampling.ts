@@ -139,6 +139,12 @@ export function makeStrictJsonSchema(
 	return cloned;
 }
 
+/** Returns true for a tool that asks for strict JSON-schema sampling only when possible (`strict: "prefer"`). */
+export function prefersJsonSchemaStrictSampling(tool: Tool): boolean {
+	const config = tool.constrainedSampling;
+	return !!config && config.type === "json_schema" && config.strict === "prefer";
+}
+
 export function getJsonSchemaToolParameters(tool: Tool, strict: boolean | undefined): Tool["parameters"] {
 	return (strict === true ? makeStrictJsonSchema(tool.parameters) : tool.parameters) as Tool["parameters"];
 }
