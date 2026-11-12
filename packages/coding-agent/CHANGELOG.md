@@ -2,17 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
-- New settings `toolOutputDisplay` and `hideNarration` define the display state new sessions start with, alongside the existing `hideThinkingBlock`. The `Ctrl+O`, `Ctrl+N`, and `Ctrl+T` keybindings change the display only for the current session; `/settings` or editing `settings.json` changes the saved default
-- The footer display indicators now always show the current state of all three display modes (`tools: …`, `narration: …`, `thinking: …`) instead of only indicators that differ from the built-in default
-
-### Changed
-
-- `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
-- `/model` and `/scoped-models` now show a model's name next to its ID when the name adds words the ID lacks, such as a renamed `models.json` override ([#5916](https://github.com/earendil-works/pi/issues/5916), [#11347](https://github.com/earendil-works/pi/pull/11347))
-
 ### Fixed
 
 - Fixed `pi install` and `pi remove` adding ever deeper nested entries to the npm `package-lock.json` when the agent directory is reached through a symlink, such as `~/.pi` linked into a dotfiles repo. pi now passes the resolved real path to npm ([#11358](https://github.com/earendil-works/pi/issues/11358))
@@ -24,6 +13,40 @@
 - Fixed HTML export not showing system messages: the system prompt and tools, and later section updates such as after `/reload`. `pi --export` now includes the system prompt and tools too ([#11261](https://github.com/earendil-works/pi/issues/11261), [#3464](https://github.com/earendil-works/pi/issues/3464), [#11290](https://github.com/earendil-works/pi/pull/11290))
 - Fixed aborting a bash command on macOS sometimes running the next command of a list such as `long_step; next_step`. pi now stops the process group before killing it ([#11252](https://github.com/earendil-works/pi/issues/11252), [#11289](https://github.com/earendil-works/pi/pull/11289))
 - Fixed streamed tool calls re-running their call renderer on every argument delta; the interactive mode now renders the latest arguments once per frame, so a large streamed `write` no longer re-highlights its whole content per delta ([#9265](https://github.com/earendil-works/pi/issues/9265))
+- Fixed MCP tools loaded by `tool_search` being dropped on resume and `/reload` when an extension deactivates only its own tool at `session_start`, as pi-web-access and pi-subagents do in `toolActivation: "auto"` mode ([#11996](https://github.com/earendil-works/pi/issues/11996))
+- Fixed the standalone binary failing to resolve extension npm dependencies whose entry point is declared in `package.json` `main` or `exports` (for example `shiki`, `yaml`, `graceful-fs`), including imports made from inside other dependencies ([#12012](https://github.com/earendil-works/pi/issues/12012))
+- Fixed the find tool returning no results for patterns starting with `./`, such as `./src/*.ts` ([#12020](https://github.com/earendil-works/pi/issues/12020))
+- Fixed pi exiting with an uncaught `AbortError` when a `read` tool call is cancelled while the file is being opened ([#11956](https://github.com/earendil-works/pi/issues/11956))
+- Fixed pi exiting with an uncaught `AbortError` when the session picker cancels loading after skipping a `.jsonl` file that is not a session, and fixed such files staying open ([#11956](https://github.com/earendil-works/pi/issues/11956))
+- Fixed `/share` crashing pi when the GitHub CLI fails to start
+- Fixed `pi update` on Windows managed installs failing with "Could not verify managed Pi" when an older system Node.js comes before the installer's standalone Node.js on PATH ([#12048](https://github.com/earendil-works/pi/issues/12048))
+- Fixed `/export` HTML showing raw terminal hyperlink escape codes around links in custom tool output; links are now clickable ([#12003](https://github.com/earendil-works/pi/issues/12003))
+
+### Added
+
+- Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
+- New settings `toolOutputDisplay` and `hideNarration` define the display state new sessions start with, alongside the existing `hideThinkingBlock`. The `Ctrl+O`, `Ctrl+N`, and `Ctrl+T` keybindings change the display only for the current session; `/settings` or editing `settings.json` changes the saved default
+- The footer display indicators now always show the current state of all three display modes (`tools: …`, `narration: …`, `thinking: …`) instead of only indicators that differ from the built-in default
+
+### Changed
+
+- `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
+- `/model` and `/scoped-models` now show a model's name next to its ID when the name adds words the ID lacks, such as a renamed `models.json` override ([#5916](https://github.com/earendil-works/pi/issues/5916), [#11347](https://github.com/earendil-works/pi/pull/11347))
+
+## [1.5.2] - 2026-11-10
+
+### New Features
+
+- **Fork sessions whose folder is gone**: when a session's original folder was moved or deleted, you can now fork it into the current folder instead of only continuing, so later resumes no longer ask. See [Continue or switch sessions](docs/sessions.md#continue-or-switch-sessions).
+
+### Changed
+
+- When a session's working directory no longer exists, for example after the project folder was renamed, interactive mode now offers `Continue`, `Fork`, or `Cancel` instead of only continuing. `Continue` runs the session in the current directory without storing the choice, as before; `Fork` copies it into the current directory as a new session with a new ID, like `--fork`, so the next resume no longer asks. This applies at startup (`--session`, `--resume`), to `/resume`, to `/import`, and to `ctx.switchSession()` from extensions ([#11975](https://github.com/earendil-works/pi/pull/11975) by [@petrroll](https://github.com/petrroll), fixes [#11060](https://github.com/earendil-works/pi/issues/11060))
+
+### Fixed
+
+- Fixed `/import` of a session whose working directory no longer exists leaving a copy in the session directory, and continuing it leaving a second copy with the same ID (`s.jsonl` and `s-1.jsonl`); the failed copy is now removed ([#11975](https://github.com/earendil-works/pi/pull/11975) by [@petrroll](https://github.com/petrroll), fixes [#11060](https://github.com/earendil-works/pi/issues/11060))
+- Fixed Anthropic OAuth requests reporting an outdated Claude Code version
 
 ## [1.5.1] - 2026-11-09
 
@@ -65,7 +88,6 @@
 - The OpenAI Codex provider is shown as "OpenAI Codex" again instead of "OpenAI Codex (legacy)" in `/login` and the model selector
 - The `/login` and `/logout` provider lists and `/login <provider>` completions now show the preferred partners Radius and OpenRouter first, then all other providers alphabetically. In the provider lists, partners are marked with `✦`, the selected Radius row shimmers in the Radius logo colors and the selected OpenRouter row glows in OpenRouter's brand color (lime on dark themes, violet on light themes)
 - Upgraded terminal Mermaid rendering to support more diagram types, including pie charts, author-defined styles, and clickable labels on terminals with hyperlink support ([#8158](https://github.com/earendil-works/pi/pull/8158) by [@xl0](https://github.com/xl0))
-- When a session's working directory no longer exists, for example after the project folder was renamed, interactive mode now offers `Continue`, `Fork`, or `Cancel` instead of only continuing. `Continue` runs the session in the current directory without storing the choice, as before; `Fork` copies it into the current directory as a new session with a new ID, like `--fork`, so the next resume no longer asks. This applies at startup (`--session`, `--resume`), to `/resume`, to `/import`, and to `ctx.switchSession()` from extensions ([#11060](https://github.com/earendil-works/pi/issues/11060))
 
 ### Fixed
 
@@ -141,7 +163,6 @@
 - Fixed MCP Streamable HTTP JSON replies bypassing message-size limits and HTTP errors buffering entire response bodies. Oversized replies and error-body content beyond the first 8 KiB are now cancelled ([#11335](https://github.com/earendil-works/pi/issues/11335))
 - Fixed valid tool arguments being rejected when their schema combined local `$ref`s with a relative root `$id`, such as `schemas/tool.json` ([#11697](https://github.com/earendil-works/pi/issues/11697))
 - Fixed the find tool starting an untracked `fd` process when cancelled during its parent-directory lookup ([#11974](https://github.com/earendil-works/pi/pull/11974) by [@petrroll](https://github.com/petrroll))
-- Fixed `/import` of a session whose working directory no longer exists leaving a copy in the session directory, and continuing it leaving a second copy with the same ID (`s.jsonl` and `s-1.jsonl`); the failed copy is now removed ([#11060](https://github.com/earendil-works/pi/issues/11060))
 
 ## [1.5.0] - 2026-11-02
 

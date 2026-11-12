@@ -1,4 +1,5 @@
-// Main view: the transcript of the open session with its composer, or the new-session screen.
+// Main view: the transcript of the open session with its composer, or the new-session screen; the model commands of
+// the command menu (commands.tsx).
 
 import {
 	Access,
@@ -8,6 +9,7 @@ import {
 	grantMode,
 	type Held,
 	isChordError,
+	keptIn,
 	liveIn,
 	serveKeyed,
 	UI_LINGER,
@@ -19,12 +21,17 @@ import {
 	buildTranscript,
 	ChevronIcon,
 	CloseIcon,
+	CommandPages,
+	Commands,
+	type CommandTarget,
 	ContextUsage,
 	CostPanel,
 	closeLayers,
+	conversationKey,
 	conversationRoute,
 	type Detail,
 	DownIcon,
+	ErrorToast,
 	errorText,
 	type FileCompletion,
 	FileCompletionPopover,
@@ -46,12 +53,14 @@ import {
 	type ModelChoice,
 	ModelPicker,
 	modelName,
+	NEW_SESSION,
 	navigate,
 	OneShotAgents,
 	OpenConversation,
 	OpenTerminal,
 	OpenWorkspaceFile,
 	openLayer,
+	openSidebar,
 	type PickedFile,
 	PiLogo,
 	PlusIcon,
@@ -68,8 +77,6 @@ import {
 	Slots,
 	StopIcon,
 	seedSizes,
-	setDrawer,
-	setSidebarCollapsed,
 	ToolActivities,
 	ToolActivityContext,
 	type Transcript,
@@ -77,6 +84,7 @@ import {
 	transcriptOf,
 	transcriptRows,
 	useChatScroll,
+	useCommandRouteTarget,
 	useComposerState,
 	useConnected,
 	useFileCompletion,
@@ -110,13 +118,18 @@ import { createPortal } from "react-dom";
 import { Drafts } from "../drafts/contract.ts";
 import { Envs } from "../envs/contract.ts";
 import { DirectoryPicker, directoryPickerLayer } from "../envs/contract.web.tsx";
+import { GlyphIcon } from "../glyphs/GlyphIcon.tsx";
 import { Models } from "../models/contract.ts";
 import type { ResourceSnapshot } from "../models/resources.ts";
+import { Projects } from "../projects/contract.ts";
+import { placeSeed } from "../projects/glyph-seed.ts";
 import { type Session, Sessions } from "../sessions/contract.ts";
 import { SessionMetrics, SessionStatus, WorkerControl } from "../status/contract.ts";
 import { type Child, conversationLocation, SubagentControl, Subagents } from "../subagents/contract.ts";
 import { SessionTree } from "../tree/contract.ts";
-import { Chat, ChatCosts, TranscriptEntries } from "./contract.ts";
+import { MODEL_COMMANDS, MODEL_PAGES } from "./commands.tsx";
+import { Chat, ChatCosts, conversationTargetId, TranscriptEntries } from "./contract.ts";
+import { newSessionChoice, thinkingLevelOf } from "./model-choice.ts";
 import { type Outgoing, outboxOf } from "./outbox.ts";
 import { sessionStart } from "./session-start.ts";
 
@@ -216,11 +229,36 @@ const attachingOf = ({ files, setFiles, addFiles }: ReturnType<typeof useCompose
 });
 
 /**
+ * The page-wide objects the conversation screens read, held once by `Main`: a screen is keyed by its conversation, so
+ * holding them in it would hold them anew, and receive their whole state again, at every switch.
+ */
+type PageObjects = {
+	readonly sessions: Held<typeof Sessions> | undefined;
+	readonly access: Held<typeof Access> | undefined;
+	readonly subagents: Held<typeof Subagents> | undefined;
+	readonly status: Held<typeof SessionStatus> | undefined;
+	/** The owner's only. */
+	readonly models: Held<typeof Models> | undefined;
+	/** The owner's only. */
+	readonly envs: Held<typeof Envs> | undefined;
+	/** The owner's only: projects.json and the sessions' projects, for the top bar's project glyph. */
+	readonly projects: Held<typeof Projects> | undefined;
+};
+
+const PageObjectsContext = createContext<PageObjects | undefined>(undefined);
+
+function usePageObjects(): PageObjects {
+	const objects = useContext(PageObjectsContext);
+	if (objects === undefined) throw new Error("usePageObjects outside Main");
+	return objects;
+}
+
+/**
  * The owner's model catalog and settings, with the default model as just chosen: `setDefault` shows the choice as the
  * default at once (the picker's mark) and rolls back if the server refuses it.
  */
-function useModelResources(owner: boolean, fail: (error: unknown) => void) {
-	const models = useObject(Models, owner ? {} : undefined);
+function useModelResources(fail: (error: unknown) => void) {
+	const { models } = usePageObjects();
 	const [resources, guess] = useOptimisticCall(
 		useReadable(models?.resources),
 		(snapshot, choice: ModelChoice) =>
@@ -289,15 +327,6 @@ function ModelControl({ resources, choice }: { resources: ResourceSnapshot | und
 	);
 }
 
-/** The composer's error; tapping it dismisses it. */
-function ErrorToast({ error, onDismiss }: { error: string | undefined; onDismiss: () => void }) {
-	return error ? (
-		<button type="button" className="toast" onClick={onDismiss}>
-			{error}
-		</button>
-	) : null;
-}
-
 /** Textarea with send, stop, steer and attachments; Enter sends with a fine pointer, Escape stops. */
 function Composer({
 	busy,
@@ -329,9 +358,17 @@ function Composer({
 	// The draft straight from the app's composer state, not through the screen's dock content: that arrives a layout
 	// effect after a keystroke, so the controlled textarea rendered the previous text first, which put the caret at the
 	// end on every keystroke and broke a phone keyboard's composition (its first tap on Send only closed the keyboard).
-	const { draft, setDraft } = useComposerState();
+	const { draft, setDraft, registerTextarea } = useComposerState();
 	const ownRef = useRef<HTMLTextAreaElement>(null);
 	const textarea = textareaRef ?? ownRef;
+	// The app's composer state focuses it on request (`focus`): opening a session, a reply, restored text.
+	const ref = useCallback(
+		(element: HTMLTextAreaElement | null) => {
+			textarea.current = element;
+			registerTextarea(element);
+		},
+		[textarea, registerTextarea],
+	);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: resizing follows the rendered draft, as in Pi Mobile.
 	useLayoutEffect(() => {
 		const element = textarea.current;
@@ -382,7 +419,7 @@ function Composer({
 			)}
 			{completion && <FileCompletionPopover completion={completion} />}
 			<textarea
-				ref={textarea}
+				ref={ref}
 				rows={1}
 				value={draft}
 				placeholder={busy ? (steer ? "Steer the current run…" : "Queue a follow-up…") : "Message Pi…"}
@@ -482,6 +519,8 @@ type ComposerProps = Omit<Parameters<typeof Composer>[0], "textareaRef">;
  * and its footer. Absent: nothing below the bar above (a one-shot agent's view).
  */
 type DockContent = {
+	/** The screen's key (`conversationKey`): an open's focus request goes to the composer of its own screen. */
+	readonly screen: string;
 	readonly above?: ReactNode;
 	readonly composer?: { readonly toBottom?: ReactNode } & (
 		| { readonly bar: ReactNode }
@@ -546,6 +585,11 @@ function useFrame(): Frame {
 function Dock({ frame, dockRef }: { frame: Frame; dockRef: (element: HTMLDivElement | null) => void }) {
 	const content = useSyncExternalStore(frame.contents.subscribe, frame.contents.snapshot);
 	const composer = content?.composer;
+	const { screenShown } = useComposerState();
+	// After the commit that put the screen's composer, or none, in place: the textarea is the one this screen shows.
+	useLayoutEffect(() => screenShown(content?.screen), [content, screenShown]);
+	// A list page replaces the chat: no chat screen shows, so opening the one shown before waits for it again.
+	useLayoutEffect(() => () => screenShown(undefined), [screenShown]);
 	return (
 		<div className="dock" ref={dockRef}>
 			{content?.above}
@@ -582,9 +626,20 @@ function TopBar({
 	const connected = useConnected();
 	const nav = useNavigation();
 	const route = useRoute();
-	// Only the owner reads environments: guests see the location without the sandbox lock.
-	const envs = useReadable(useObject(Envs, owner ? {} : undefined)?.envs);
+	// Only the owner reads environments (`PageObjects.envs`): guests see the location without the sandbox lock.
+	const objects = usePageObjects();
+	const envs = useReadable(objects.envs?.envs);
 	const sandboxed = envs?.find((env) => env.name === session?.env)?.config.type === "gondolin";
+	// The project glyph the sidebar shows for this session (guests read no projects: the path's own glyph).
+	const kept = keptIn(objects.projects, "owner");
+	const projects = useReadable(kept?.projects);
+	const memberships = useReadable(kept?.sessions);
+	const glyph = session && (
+		<GlyphIcon
+			seed={placeSeed(projects ?? [], session.env ?? null, session.cwd, memberships?.[session.id])}
+			size={11}
+		/>
+	);
 	const lock = sandboxed && (
 		<span className="title-lock">
 			<LockIcon size={11} />
@@ -592,15 +647,9 @@ function TopBar({
 	);
 	return (
 		<header className="topbar">
-			<button
-				type="button"
-				className="icon-button menu sidebar-open"
-				onClick={() =>
-					window.matchMedia("(min-width: 900px)").matches ? setSidebarCollapsed(false) : setDrawer(true)
-				}
-				aria-label="Sessions"
-			>
+			<button type="button" className="icon-button menu sidebar-open" onClick={openSidebar} aria-label="Sessions">
 				<MenuIcon />
+				<Slot name="menu-badge" />
 			</button>
 			<div className="title">
 				{child ? (
@@ -632,17 +681,22 @@ function TopBar({
 									) : (
 										<>
 											{lock}
+											{glyph}
 											{locationLabel(session.env, session.cwd)}
 										</>
 									)}
 								</button>
 							) : (
-								<p>{locationLabel(session.env, session.cwd)}</p>
+								<p>
+									{glyph}
+									{locationLabel(session.env, session.cwd)}
+								</p>
 							))}
 					</>
 				)}
 			</div>
 			{!connected && <span className="offline">Offline</span>}
+			<Slot name="view-actions" />
 			<Slot name="artifact-actions" />
 			<Slot name="terminal-actions" />
 			<Slot name="workspace-actions" />
@@ -708,6 +762,28 @@ function useRestoredDrafts(
 	}, [drafts, pending, restore]);
 }
 
+/**
+ * What the command menu acts on while a conversation shows: a subagent's conversation, else the session while its own
+ * conversation shows; nothing for a one-shot agent (read-only) or before the session and its subagents are known.
+ */
+function viewTarget(
+	session: Session | undefined,
+	conversation: number,
+	child: Child | undefined,
+): CommandTarget | undefined {
+	if (!session || child?.kind === "agent") return undefined;
+	if (child)
+		return {
+			type: "conversation",
+			id: conversationTargetId(session.id, conversation),
+			kind: "Conversation",
+			label: child.name,
+		};
+	return session.main === conversation
+		? { type: "session", id: session.id, kind: "Session", label: session.title }
+		: undefined;
+}
+
 function SessionChat({ sessionId, conversationId }: { sessionId: string; conversationId: number }) {
 	const nav = useNavigation();
 	const openConversation = useCallback(
@@ -743,8 +819,9 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const connected = useConnected();
 	const host = useHost();
+	const objects = usePageObjects();
 	// The catalog as the owner or a guest sees it (`worker` is a session worker's).
-	const sessions = liveIn(useObject(Sessions, {}), "owner", "guest");
+	const sessions = liveIn(objects.sessions, "owner", "guest");
 	const listed = useReadable(sessions?.sessions);
 	const session = listed?.find((entry) => entry.id === sessionId);
 	// A session archived or removed elsewhere while viewed: the new-session screen replaces it, and the toast says why
@@ -756,11 +833,11 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 			// What this device kept of a session the server no longer has goes with it (an archived one stays).
 			if (!session) void forgetSession(sessionId);
 			toast(session ? "Session is archived" : "Session not found");
-			void nav.replace(conversationRoute(current, undefined), current);
+			void nav.replace(NEW_SESSION, current);
 		}
 	}, [listed, session, nav, sessionId, toast]);
 	// Who this browser is, as the server last said: kept while reconnecting (`useOwner`), so the composer stays.
-	const access = useObject(Access, {});
+	const { access } = objects;
 	const liveGrant = useReadable(liveIn(access, "guest")?.grant);
 	const owner = useOwner();
 	const lastGrant = useRef(liveGrant);
@@ -768,12 +845,13 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	if (useStatus(access) === "live") lastGrant.current = liveGrant;
 	const grant = owner ? undefined : lastGrant.current;
 	const { fail } = useComposerState();
-	const [resources, setDefault] = useModelResources(owner, fail);
-	const subagents = liveIn(useObject(Subagents, {}), "reader");
+	const [resources, setDefault] = useModelResources(fail);
+	const subagents = liveIn(objects.subagents, "reader");
 	const children = useReadable(subagents?.children);
 	const child = children?.[sessionId]?.find((entry) => entry.conversationId === conversationId);
 	// A code mode script's one-shot agent: read-only, opened from the script's tool card.
 	const oneShot = child?.kind === "agent";
+	useCommandRouteTarget(viewTarget(session, conversationId, child));
 	// Where the viewed conversation works: a subagent may have its own location (e.g. a git worktree, or another machine).
 	const viewLocation = conversationLocation(session, child);
 	const viewCwd = viewLocation?.cwd;
@@ -801,7 +879,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		)
 			void nav.replace(conversationRoute(current, sessionId, main), current);
 	}, [children, child, conversationId, main, nav, sessionId]);
-	const workers = liveIn(useObject(SessionStatus, {}), "reader");
+	const workers = liveIn(objects.status, "reader");
 	const workerError = useReadable(workers?.statuses)?.[sessionId]?.error;
 	const [activationError, setActivationError] = useState<string>();
 	const failure = workerError ?? activationError;
@@ -858,7 +936,6 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		setDraft,
 		steer,
 		setSteer,
-		error,
 		setError,
 		files,
 		setFiles,
@@ -869,6 +946,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		setReplyTo,
 		canReply,
 		mentionName,
+		focus,
 	} = composer;
 	// `/tree` from a message (docs/tree.md): the owner, in the main conversation. A reference of its own, as the switch
 	// reaches the session row (whose `main` moves this view) before its result; a user message's text fills the composer.
@@ -895,9 +973,9 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	const startReply = useCallback(
 		(target: { entryId: number; name: string }) => {
 			setReplyTo(target);
-			document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
+			focus();
 		},
-		[setReplyTo],
+		[setReplyTo, focus],
 	);
 	// Kept while reconnecting, as the composer is (`canWrite`).
 	const replying = canWrite && canReply ? replyTo : undefined;
@@ -923,9 +1001,9 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		(texts: readonly string[], after = false) => {
 			if (!texts.length) return;
 			setDraft((current) => (after ? joinDraft(current, ...texts) : joinDraft(...texts, current)));
-			document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
+			focus();
 		},
-		[setDraft],
+		[setDraft, focus],
 	);
 	// Who may write is known before the chat object is live (`canWrite`): drafts hold at once.
 	useRestoredDrafts(sessionId, conversationId, canWrite, restore);
@@ -1182,8 +1260,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		session
 			? {
 					model: agentModel ?? session.model,
-					thinkingLevel:
-						transcript?.agent.thinkingLevel ?? (session.thinkingLevel as ModelChoice["thinkingLevel"]),
+					thinkingLevel: transcript?.agent.thinkingLevel ?? thinkingLevelOf(session.thinkingLevel),
 				}
 			: undefined,
 		(_, next) => next,
@@ -1350,6 +1427,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const place = useChatScreen(
 		{
+			screen: conversationKey({ session: sessionId, conversation: conversationId }),
 			above: subagentBar,
 			// A one-shot agent's view has no composer: its bar above has the Stop.
 			...(oneShot && canWrite
@@ -1429,7 +1507,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 				/>
 			)}
 
-			<ErrorToast error={error} onDismiss={() => setError(undefined)} />
+			<ErrorToast />
 			{place(
 				<div className="scroller transcript" ref={follow.scroller}>
 					{failure && connected ? (
@@ -1516,28 +1594,36 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 }
 
+/** The new-session screen as the command menu's target: a model change there applies to the session about to start. */
+const NEW_SESSION_TARGET: CommandTarget = { type: "new-session", id: "new", kind: "New session", label: "" };
+
 function NewSession() {
 	const connected = useConnected();
 	const host = useHost();
 	const owner = useOwner();
-	const catalog = useObject(Sessions, {});
+	const catalog = usePageObjects().sessions;
 	const listed = useReadable(liveIn(catalog, "owner", "guest")?.sessions);
 	// Only the owner creates sessions.
 	const sessions = liveIn(catalog, "owner");
-	const [resources, setDefault] = useModelResources(owner, useComposerState().fail);
+	const [resources, setDefault] = useModelResources(useComposerState().fail);
 	const recent = useMemo(() => (listed ?? []).toSorted((a, b) => b.updatedAt - a.updatedAt), [listed]);
-	const { location: selectedLocation, setLocation, choice: selectedChoice, setChoice } = useNewSessionState();
+	const {
+		location: selectedLocation,
+		setLocation,
+		join,
+		setJoin,
+		choice: selectedChoice,
+		setChoice,
+	} = useNewSessionState();
 	const location =
 		selectedLocation ?? (recent[0] ? { env: recent[0].env ?? null, cwd: recent[0].cwd } : { env: null, cwd: "~" });
-	const fallback = resources?.settings.defaultModel ?? recent[0]?.model;
-	const choice: ModelChoice | undefined =
-		selectedChoice ??
-		(fallback ? { model: fallback, thinkingLevel: resources?.settings.thinkingLevel ?? "high" } : undefined);
+	const choice = newSessionChoice(selectedChoice, resources, recent[0]);
+	useCommandRouteTarget(NEW_SESSION_TARGET);
 	const contextWindow = resources?.models.find(
 		(entry) => entry.provider === choice?.model.provider && entry.modelId === choice?.model.modelId,
 	)?.contextWindow;
 	const composer = useComposerState();
-	const { draft, setDraft, files, setFiles, error, setError, steer, setSteer, setStopped } = composer;
+	const { draft, setDraft, files, setFiles, setError, steer, setSteer, setStopped } = composer;
 	const cwdSheet = useSheet("cwd");
 	const modelSheet = useSheet("model");
 	const attaching = attachingOf(composer);
@@ -1570,7 +1656,7 @@ function NewSession() {
 				item: outgoingItem(id, text, files, OWNER_AUTHOR),
 			},
 			// The page chooses the session's ID: a retried creation answers the same session.
-			{ session: crypto.randomUUID(), location, choice },
+			{ session: crypto.randomUUID(), location, choice, ...(join ? { join } : {}) },
 		);
 		setDraft("");
 		setFiles([]);
@@ -1591,7 +1677,7 @@ function NewSession() {
 			return;
 		}
 		sessionStart.connect({
-			create: async ({ session, location, choice }) => {
+			create: async ({ session, location, choice, join }) => {
 				// The new session's worker starts beside the creation, not after it (its start waits for the row): held
 				// here and lingering for the session's view, which holds it next.
 				const chat = host.hold(Chat, { session, conversation: 1 }, BACKGROUND_CONTEXT);
@@ -1611,10 +1697,15 @@ function NewSession() {
 					chat.release();
 					throw error;
 				}
+				// A project's "+": the session joins the project once it exists, so a refused creation leaves no membership
+				// behind; a failed join leaves the session as it is, and the toast says why.
+				if (join) void join.run(session).catch(composer.fail);
 			},
 			// The server's own errors (a missing directory, an unknown model) refuse; a lost connection is tried again.
 			refused: (error) => !isChordError(error) || refused(error),
 			created: (session) => {
+				// The next new session starts in no project unless its "+" is used again.
+				setJoin(undefined);
 				if (shownHere.current) navigate({ session }, { replace: true });
 			},
 			restore: (messages, error) => {
@@ -1624,7 +1715,7 @@ function NewSession() {
 			},
 		});
 		return () => sessionStart.connect(undefined);
-	}, [connected, sessions, host, setDraft, setFiles, setError]);
+	}, [connected, sessions, host, setDraft, setFiles, setError, setJoin, composer.fail]);
 	// Leaving the page loses a session not created yet: the browser asks first.
 	useEffect(() => {
 		if (!start) return;
@@ -1634,6 +1725,7 @@ function NewSession() {
 	}, [start]);
 	const place = useChatScreen(
 		{
+			screen: conversationKey(NEW_SESSION),
 			composer: owner
 				? {
 						props: { busy: false, steer, setSteer, disabled: false, onSend: send, attaching },
@@ -1683,7 +1775,7 @@ function NewSession() {
 					onClose={closeLayers}
 				/>
 			)}
-			<ErrorToast error={error} onDismiss={() => setError(undefined)} />
+			<ErrorToast />
 			{place(
 				<div className={outgoing ? "scroller transcript" : "scroller"} ref={follow.scroller}>
 					{outgoing && rows ? (
@@ -1701,6 +1793,7 @@ function NewSession() {
 							>
 								<FolderIcon />
 								<span>{locationLabel(location.env, location.cwd)}</span>
+								{join && <small className="cwd-join">in {join.label}</small>}
 								<ChevronIcon size={14} />
 							</button>
 							{owner && resources && !resources.credentials.length && (
@@ -1738,7 +1831,18 @@ function Main() {
 	const nav = useNavigation();
 	const route = useRoute();
 	const ended = useShareEnded();
+	const owner = useOwner();
 	const access = useObject(Access, {});
+	const sessions = useObject(Sessions, {});
+	const subagents = useObject(Subagents, {});
+	const status = useObject(SessionStatus, {});
+	const models = useObject(Models, owner ? {} : undefined);
+	const envs = useObject(Envs, owner ? {} : undefined);
+	const projects = useObject(Projects, owner ? {} : undefined);
+	const objects = useMemo(
+		() => ({ sessions, access, subagents, status, models, envs, projects }),
+		[sessions, access, subagents, status, models, envs, projects],
+	);
 	const grant = useReadable(liveIn(access, "guest")?.grant);
 	// A guest stays within the sessions shared with it; anywhere else it lands in the one shared or joined last.
 	useEffect(() => {
@@ -1759,26 +1863,31 @@ function Main() {
 	}, [route, shownConversation, nav]);
 	const conversation = route.session && `${route.session}:${shownConversation}`;
 	return (
-		<ChatFrame.Provider value={frame}>
-			{ended ? (
-				<ShareEnded />
-			) : route.session ? (
-				<Slot name="chat-content">
-					<Slot name="chat-attribution">
-						<SessionChat key={conversation} sessionId={route.session} conversationId={shownConversation} />
+		<PageObjectsContext.Provider value={objects}>
+			<ChatFrame.Provider value={frame}>
+				{ended ? (
+					<ShareEnded />
+				) : route.session ? (
+					<Slot name="chat-content">
+						<Slot name="chat-attribution">
+							<SessionChat key={conversation} sessionId={route.session} conversationId={shownConversation} />
+						</Slot>
 					</Slot>
-				</Slot>
-			) : (
-				<NewSession />
-			)}
-			{/* The transcript of the screen above goes into the view (`useChatScreen`), the dock floats over its bottom. */}
-			<div className="chat">
-				<div className="chat-view" ref={setView} />
-				<Dock frame={frame} dockRef={setDock} />
-			</div>
-			{/* Below the chat, per conversation (the bottom terminal panel). */}
-			{conversation && !ended && <Slot key={conversation} name="chat-bottom" />}
-		</ChatFrame.Provider>
+				) : route.newSession ? (
+					<NewSession />
+				) : (
+					// Home: what a plugin shows there (the Familiar opens its session), else the new-session screen.
+					<Slot name="home" fallback={<NewSession />} />
+				)}
+				{/* The transcript of the screen above goes into the view (`useChatScreen`), the dock floats over its bottom. */}
+				<div className="chat">
+					<div className="chat-view" ref={setView} />
+					<Dock frame={frame} dockRef={setDock} />
+				</div>
+				{/* Below the chat, per conversation (the bottom terminal panel). */}
+				{conversation && !ended && <Slot key={conversation} name="chat-bottom" />}
+			</ChatFrame.Provider>
+		</PageObjectsContext.Provider>
 	);
 }
 
@@ -1786,4 +1895,6 @@ export default defineFacet((host, self) => {
 	// The chat plugin defines the transcript's entry displays (chat-mode adds its own): served on the page too.
 	serveKeyed(host, TranscriptEntries);
 	self.contribute(Slots, { main: Main });
+	self.contribute(Commands, MODEL_COMMANDS);
+	self.contribute(CommandPages, MODEL_PAGES);
 });
